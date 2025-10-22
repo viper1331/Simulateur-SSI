@@ -1,7 +1,7 @@
 import cors from 'cors';
 import express from 'express';
 import http from 'http';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { WebSocketServer, WebSocket } from 'ws';
 import {
   defaultScenarios,
@@ -358,6 +358,56 @@ app.get('/api/scenarios', async (_req, res) => {
     };
   });
   res.json(mapped);
+});
+
+app.post('/api/scenarios', authenticate, async (req, res) => {
+  const { user, token } = req as AuthenticatedRequest;
+  if (!user || user.role !== 'TRAINER' || !token) {
+    return res.status(403).json({ error: 'Accès formateur requis' });
+  }
+
+  const parseResult = scenarioSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    return res.status(400).json({
+      error: 'Scénario invalide',
+      details: parseResult.error.issues
+    });
+  }
+
+  const scenario = parseResult.data;
+
+  try {
+    await prisma.scenario.create({
+      data: {
+        id: scenario.id,
+        name: scenario.name,
+        description: scenario.description,
+        config: JSON.stringify({
+          t1: scenario.t1,
+          t2: scenario.t2,
+          zd: scenario.zd,
+          zf: scenario.zf,
+          das: scenario.das,
+          peripherals: scenario.peripherals
+        }),
+        events: {
+          create: scenario.events.map((event) => ({
+            id: event.id,
+            type: event.type,
+            payload: JSON.stringify(event.payload ?? {}),
+            offset: event.timestamp
+          }))
+        }
+      }
+    });
+    res.status(201).json(scenario);
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      return res.status(409).json({ error: 'Un scénario avec cet identifiant existe déjà.' });
+    }
+    console.error('Failed to create scenario', error);
+    res.status(500).json({ error: 'Impossible de créer le scénario.' });
+  }
 });
 
 app.get('/api/runs/:runId', async (req, res) => {
