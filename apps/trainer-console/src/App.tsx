@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Indicator } from '@ssi/ui-kit';
 import { useTrainerStore } from './store';
 import type { AccessLevel, Scenario, ScenarioEvent, User } from '@ssi/shared-models';
@@ -135,11 +135,13 @@ const VisualAlarmPanel = ({ scenario, activeAlarms }: { scenario?: Scenario; act
 const ScenarioSelector = ({
   scenarios,
   selectedScenarioId,
-  onSelect
+  onSelect,
+  onCreate
 }: {
   scenarios: Scenario[];
   selectedScenarioId?: string;
   onSelect: (id: string) => void;
+  onCreate: () => void;
 }) => (
   <Card title="Scénarios disponibles">
     {scenarios.length > 0 ? (
@@ -173,6 +175,13 @@ const ScenarioSelector = ({
     ) : (
       <p className="text-sm text-slate-500">Aucun scénario disponible pour le moment.</p>
     )}
+    <Button
+      type="button"
+      onClick={onCreate}
+      className="mt-3 w-full border border-dashed border-indigo-300 bg-white text-sm font-semibold text-indigo-600 hover:border-indigo-400 hover:bg-indigo-50"
+    >
+      Nouveau scénario personnalisé
+    </Button>
   </Card>
 );
 
@@ -1353,6 +1362,7 @@ const App = () => {
   const fetchScenarios = useTrainerStore((state) => state.fetchScenarios);
   const createTrainee = useTrainerStore((state) => state.createTrainee);
   const startScenario = useTrainerStore((state) => state.startScenario);
+  const createScenario = useTrainerStore((state) => state.createScenario);
   const updateScenario = useTrainerStore((state) => state.updateScenario);
 
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -1363,6 +1373,24 @@ const App = () => {
   const [creationFeedback, setCreationFeedback] = useState<string | undefined>();
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | undefined>();
   const [isDebugOpen, setIsDebugOpen] = useState(false);
+
+  const handleCreateScenario = useCallback(() => {
+    const scenarioId = createId('scenario');
+    const newScenario: Scenario = {
+      id: scenarioId,
+      name: 'Nouveau scénario',
+      description: 'Scénario personnalisé créé par le formateur',
+      t1: 15,
+      t2: 5,
+      zd: [],
+      zf: [],
+      das: [],
+      peripherals: [],
+      events: []
+    };
+    void createScenario(newScenario);
+    setSelectedScenarioId(scenarioId);
+  }, [createScenario]);
 
   useEffect(() => {
     if (auth) {
@@ -1693,6 +1721,7 @@ const App = () => {
               scenarios={scenarios}
               selectedScenarioId={activeScenarioId}
               onSelect={setSelectedScenarioId}
+              onCreate={handleCreateScenario}
             />
             <SessionOverview scenario={scenario} />
             <ScorePanel />

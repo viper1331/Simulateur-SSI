@@ -59,6 +59,7 @@ type TrainerStore = {
   stopScenario: () => void;
   createTrainee: (payload: { name: string; email: string; password: string }) => Promise<boolean>;
   setAccessLevel: (level: AccessLevel) => void;
+  createScenario: (scenario: Scenario) => Promise<void>;
   updateScenario: (scenario: Scenario) => void;
 };
 
@@ -348,6 +349,48 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
         token: auth.token
       })
     );
+  },
+  async createScenario(newScenario) {
+    logger.info('Création d’un scénario personnalisé demandée', { scenarioId: newScenario.id });
+    set((state) => ({
+      scenarios: [
+        ...state.scenarios.filter((scenario) => scenario.id !== newScenario.id),
+        newScenario
+      ]
+    }));
+
+    const { auth } = get();
+    if (!auth) {
+      logger.warn('Scénario créé localement sans authentification, aucune persistance serveur.', {
+        scenarioId: newScenario.id
+      });
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/api/scenarios`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${auth.token}`
+        },
+        body: JSON.stringify(newScenario)
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => undefined);
+        logger.error('Échec de la persistance du scénario personnalisé', {
+          scenarioId: newScenario.id,
+          status: response.status,
+          error: payload?.error
+        });
+      } else {
+        logger.info('Scénario personnalisé sauvegardé sur le serveur', { scenarioId: newScenario.id });
+      }
+    } catch (error) {
+      console.error('Failed to persist custom scenario', error);
+      logger.error('Erreur lors de la création du scénario personnalisé', error);
+    }
   },
   updateScenario(updatedScenario) {
     logger.debug('Mise à jour locale du scénario', { scenarioId: updatedScenario.id });
