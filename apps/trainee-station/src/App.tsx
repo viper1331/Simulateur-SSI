@@ -33,13 +33,13 @@ const Buzzer = ({ active }: { active: boolean }) => {
 const TemporisationBar = ({ label, value, max }: { label: string; value?: number; max?: number }) => {
   const percentage = value !== undefined && max ? Math.round((value / max) * 100) : 0;
   return (
-    <div>
-      <div className="flex items-center justify-between text-xs font-semibold text-slate-600">
+    <div className="ssi-temporisation">
+      <div className="ssi-temporisation__header">
         <span>{label}</span>
         <span>{value ?? '--'} s</span>
       </div>
-      <div className="mt-1 h-2 rounded bg-slate-200">
-        <div className="h-2 rounded bg-indigo-500 transition-all" style={{ width: `${percentage}%` }} />
+      <div className="ssi-temporisation__track">
+        <div className="ssi-temporisation__value" style={{ width: `${percentage}%` }} />
       </div>
     </div>
   );
@@ -56,31 +56,20 @@ const VisualAlarmLamp = ({
   items: string[];
   emptyLabel: string;
 }) => (
-  <div className="rounded border border-slate-200 bg-white p-2">
-    <div className="flex items-center gap-2">
-      <span
-        className={`h-4 w-4 rounded-full border border-slate-300 transition-all ${
-          items.length > 0 ? colorClass : 'bg-slate-200'
-        }`}
-      />
-      <span className="text-xs font-semibold uppercase text-slate-600">{label}</span>
-      {items.length > 0 && (
-        <span className="ml-auto rounded-full bg-slate-100 px-2 py-0.5 text-[0.65rem] font-semibold text-slate-500">
-          {items.length}
-        </span>
-      )}
+  <div className="visual-alarm">
+    <div className="visual-alarm__header">
+      <span className={`visual-alarm__led ${items.length > 0 ? colorClass : 'visual-alarm__led--idle'}`} />
+      <span className="visual-alarm__label">{label}</span>
+      {items.length > 0 && <span className="visual-alarm__count">{items.length}</span>}
     </div>
     {items.length > 0 ? (
-      <ul className="mt-2 space-y-1 text-xs text-slate-600">
+      <ul className="visual-alarm__list">
         {items.map((item) => (
-          <li key={item} className="flex items-center gap-2">
-            <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
-            <span>{item}</span>
-          </li>
+          <li key={item}>{item}</li>
         ))}
       </ul>
     ) : (
-      <p className="mt-2 text-xs text-slate-500">{emptyLabel}</p>
+      <p className="visual-alarm__empty">{emptyLabel}</p>
     )}
   </div>
 );
@@ -97,16 +86,16 @@ const VisualAlarmPanel = ({ scenario, activeAlarms }: { scenario?: Scenario; act
   const daiItems = activeAlarms.dai.map(resolveLabel);
 
   return (
-    <div className="mt-2 space-y-2">
+    <div className="ssi-alarms">
       <VisualAlarmLamp
         label="DM en alarme"
-        colorClass="bg-red-600 shadow-[0_0_12px_rgba(220,38,38,0.55)] animate-pulse"
+        colorClass="visual-alarm__led--danger"
         items={dmItems}
         emptyLabel="Aucun DM déclenché."
       />
       <VisualAlarmLamp
         label="DAI en alarme"
-        colorClass="bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.55)] animate-pulse"
+        colorClass="visual-alarm__led--warning"
         items={daiItems}
         emptyLabel="Aucun DAI déclenché."
       />
@@ -213,166 +202,6 @@ const AccessLevelStatus = ({
                 </li>
               );
             })}
-          </ul>
-        </div>
-      </div>
-    </Card>
-  );
-};
-
-const OutOfServicePanel = ({
-  scenario,
-  outOfService,
-  accessLevel,
-  onToggle
-}: {
-  scenario?: Scenario;
-  outOfService?: { zd: string[]; das: string[] };
-  accessLevel: AccessLevel;
-  onToggle: (targetType: 'zd' | 'das', targetId: string, active: boolean, label: string) => void;
-}) => {
-  const authorized = accessLevel >= 3;
-  if (!scenario) {
-    return (
-      <Card title="Gestion des mises hors service">
-        <p className="text-sm text-slate-500">En attente du lancement d'un scénario pour gérer les organes.</p>
-      </Card>
-    );
-  }
-
-  const zoneOut = new Set(outOfService?.zd ?? []);
-  const dasOut = new Set(outOfService?.das ?? []);
-
-  return (
-    <Card title="Gestion des mises hors service">
-      {!authorized && (
-        <p className="text-xs text-amber-600">
-          Accès SSI 3 requis pour modifier l'état des zones ou des DAS.
-        </p>
-      )}
-      <div className="mt-3 space-y-4 text-sm text-slate-600">
-        <div>
-          <h4 className="text-xs font-semibold uppercase text-slate-500">Zones de détection</h4>
-          <div className="mt-2 space-y-2">
-            {scenario.zd.map((zone) => {
-              const isOut = zoneOut.has(zone.id);
-              const actionLabel = isOut ? 'Remettre en service' : 'Mettre hors service';
-              const actionTone = isOut
-                ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                : 'bg-rose-100 text-rose-700 hover:bg-rose-200';
-              return (
-                <div key={zone.id} className="rounded border border-slate-200 bg-white p-2">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="text-sm font-semibold text-slate-700">{zone.name}</div>
-                      <div className="text-xs text-slate-500">ZD {zone.id}</div>
-                    </div>
-                    <Indicator label={isOut ? 'Hors service' : 'En service'} tone={isOut ? 'warning' : 'ok'} active />
-                  </div>
-                  <div className="mt-2 flex justify-end">
-                    <Button
-                      disabled={!authorized}
-                      onClick={() => onToggle('zd', zone.id, !isOut, zone.name)}
-                      className={`${actionTone} disabled:bg-slate-200 disabled:text-slate-500`}
-                      title={authorized ? undefined : 'Accès SSI 3 requis'}
-                    >
-                      {actionLabel}
-                    </Button>
-                  </div>
-                </div>
-              );
-            })}
-            {scenario.zd.length === 0 && (
-              <p className="text-xs text-slate-500">Aucune zone de détection déclarée dans ce scénario.</p>
-            )}
-          </div>
-        </div>
-        <div>
-          <h4 className="text-xs font-semibold uppercase text-slate-500">Dispositifs actionnés de sécurité</h4>
-          <div className="mt-2 space-y-2">
-            {scenario.das.map((das) => {
-              const isOut = dasOut.has(das.id);
-              const actionLabel = isOut ? 'Remettre en service' : 'Mettre hors service';
-              const actionTone = isOut
-                ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                : 'bg-rose-100 text-rose-700 hover:bg-rose-200';
-              return (
-                <div key={das.id} className="rounded border border-slate-200 bg-white p-2">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="text-sm font-semibold text-slate-700">{das.name}</div>
-                      <div className="text-xs text-slate-500 uppercase">{das.type}</div>
-                    </div>
-                    <Indicator label={isOut ? 'Hors service' : 'En service'} tone={isOut ? 'warning' : 'ok'} active />
-                  </div>
-                  <div className="mt-2 flex justify-end">
-                    <Button
-                      disabled={!authorized}
-                      onClick={() => onToggle('das', das.id, !isOut, das.name)}
-                      className={`${actionTone} disabled:bg-slate-200 disabled:text-slate-500`}
-                      title={authorized ? undefined : 'Accès SSI 3 requis'}
-                    >
-                      {actionLabel}
-                    </Button>
-                  </div>
-                </div>
-              );
-            })}
-            {scenario.das.length === 0 && (
-              <p className="text-xs text-slate-500">Aucun DAS associé à ce scénario.</p>
-            )}
-          </div>
-        </div>
-      </div>
-    </Card>
-  );
-};
-
-const Synoptic = ({ scenario }: { scenario?: Scenario }) => {
-  const dasStatus = useSessionStore((state) => state.session?.dasStatus ?? {});
-  const outOfService = useSessionStore((state) => state.session?.outOfService ?? { zd: [], das: [] });
-  if (!scenario) {
-    return (
-      <Card title="Synoptique">
-        <p className="text-sm text-slate-500">Aucun scénario actif.</p>
-      </Card>
-    );
-  }
-
-  return (
-    <Card title="Synoptique zones / DAS">
-      <div className="grid grid-cols-2 gap-4 text-sm">
-        <div>
-          <h4 className="mb-1 text-xs font-semibold uppercase text-slate-500">Zones de détection</h4>
-          <ul className="space-y-1">
-            {scenario.zd.map((zone: Scenario['zd'][number]) => (
-              <li key={zone.id} className="rounded bg-slate-100 px-2 py-1">
-                <span className="font-semibold">{zone.name}</span>
-                <span className="ml-2 text-xs text-slate-500">ZD {zone.id}</span>
-                {outOfService.zd.includes(zone.id) && (
-                  <span className="ml-2 text-xs font-semibold uppercase text-amber-600">HS</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div>
-          <h4 className="mb-1 text-xs font-semibold uppercase text-slate-500">Dispositifs</h4>
-          <ul className="space-y-1">
-            {scenario.das.map((das: Scenario['das'][number]) => (
-              <li key={das.id} className="rounded bg-slate-100 px-2 py-1">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold">{das.name}</span>
-                  <span className="text-xs uppercase text-slate-500">{das.type}</span>
-                </div>
-                <div className="text-xs text-slate-500">
-                  État : {dasStatus[das.id] ?? das.status}
-                  {outOfService.das.includes(das.id) && (
-                    <span className="ml-2 font-semibold uppercase text-amber-600">HS</span>
-                  )}
-                </div>
-              </li>
-            ))}
           </ul>
         </div>
       </div>
@@ -532,6 +361,8 @@ const CmsiFacade = ({
   const reset = useSessionStore((state) => state.reset);
   const stopUGA = useSessionStore((state) => state.stopUGA);
   const scenarios = useSessionStore((state) => state.scenarios);
+  const dasStatus = useSessionStore((state) => state.session?.dasStatus ?? {});
+  const sessionId = useSessionStore((state) => state.sessionId);
 
   useEffect(() => {
     connect();
@@ -572,72 +403,232 @@ const CmsiFacade = ({
   const canReset = accessLevel >= 2;
   const canStopUGA = accessLevel >= 2;
   const canTest = accessLevel >= 1;
+  const timeline = session?.timeline ?? [];
+  const lastEvents = timeline.slice(-3).reverse();
+
+  const statusItems: Array<{ label: string; active: boolean; tone: 'danger' | 'warning' | 'ok' }> = [
+    { label: 'Alarme feu', active: session?.cmsiPhase === 'preAlerte' || session?.cmsiPhase === 'alerte', tone: 'danger' },
+    { label: 'UGA active', active: session?.ugaActive ?? false, tone: 'danger' },
+    { label: 'Défaut alimentation', active: session?.alimentation !== 'secteur', tone: 'warning' },
+    {
+      label: 'Surveillance DAS',
+      active: Object.values(session?.dasStatus ?? {}).some((status) => status !== 'en_position'),
+      tone: 'warning'
+    },
+    { label: 'Mises hors service', active: outOfServiceCount > 0, tone: 'warning' }
+  ];
+
+  const authorizedServiceToggle = accessLevel >= 3;
 
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-      <Card title="Statut CMSI">
-        <div className="space-y-2">
-          <Indicator label="Alarme feu" active={session?.cmsiPhase === 'preAlerte' || session?.cmsiPhase === 'alerte'} tone="danger" />
-          <Indicator label="UGA active" active={session?.ugaActive ?? false} tone="danger" />
-          <Indicator label="Défaut alimentation" active={session?.alimentation !== 'secteur'} tone="warning" />
-          <Indicator label="DAS" active={Object.values(session?.dasStatus ?? {}).some((status) => status !== 'en_position')} tone="warning" />
-          <Indicator label="Hors service" active={outOfServiceCount > 0} tone="warning" />
-        </div>
-        <div className="mt-4">
-          <h4 className="text-xs font-semibold uppercase text-slate-500">Alarmes visuelles</h4>
+    <div className="ssi-panel">
+      <div className="ssi-panel__column ssi-panel__column--left">
+        <section className="ssi-module ssi-module--controls">
+          <header className="ssi-module__header">
+            <div className="ssi-badge">CMSI Apprenant</div>
+            <span className="ssi-module__subtitle">Catégorie A</span>
+          </header>
+          <div className="ssi-display">
+            <div className="ssi-display__screen">
+              <div className="ssi-display__line ssi-display__line--title">
+                {scenario?.name ?? 'Aucun scénario sélectionné'}
+              </div>
+              <div className="ssi-display__line">Phase CMSI : {session?.cmsiPhase ?? 'Repos'}</div>
+              <div className="ssi-display__line">Connexion : {connectionStatus}</div>
+              <div className="ssi-display__line">Session : {sessionId ?? '—'}</div>
+            </div>
+            <div className="ssi-display__status">
+              {statusItems.map((item) => (
+                <div
+                  key={item.label}
+                  className={`ssi-led ssi-led--${item.tone} ${item.active ? 'ssi-led--active' : ''}`}
+                >
+                  <span className="ssi-led__dot" />
+                  <span className="ssi-led__label">{item.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="ssi-temporisations">
+            <TemporisationBar label="Temporisation T1" value={session?.t1Remaining} max={session?.t1} />
+            <TemporisationBar label="Temporisation T2" value={session?.t2Remaining} max={session?.t2} />
+          </div>
+          <div className="ssi-control-grid">
+            <Button
+              onClick={ack}
+              className="ssi-control-button ssi-control-button--ack"
+              disabled={!canAck}
+              title={canAck ? undefined : 'Accès SSI 1 requis'}
+            >
+              Acquitter
+            </Button>
+            <Button
+              onClick={reset}
+              className="ssi-control-button ssi-control-button--reset"
+              disabled={!canReset}
+              title={canReset ? undefined : 'Accès SSI 2 requis'}
+            >
+              Réarmement
+            </Button>
+            <Button
+              onClick={stopUGA}
+              className="ssi-control-button ssi-control-button--uga"
+              disabled={!canStopUGA}
+              title={canStopUGA ? undefined : 'Accès SSI 2 requis'}
+            >
+              Arrêt évacuation
+            </Button>
+            <Button
+              className="ssi-control-button ssi-control-button--test"
+              onClick={() => alert('Test lampes enclenché')}
+              disabled={!canTest}
+              title={canTest ? undefined : 'Accès SSI 1 requis'}
+            >
+              Test lampes
+            </Button>
+          </div>
+          <footer className="ssi-module__footer">
+            <span className="ssi-module__footer-label">État machine</span>
+            <span className="ssi-module__footer-value">{String(cmsiSnapshot.value)}</span>
+          </footer>
+        </section>
+      </div>
+      <div className="ssi-panel__column ssi-panel__column--center">
+        <section className="ssi-module">
+          <header className="ssi-section-header">
+            <span className="ssi-section-header__title">Signalisations</span>
+            <span className="ssi-section-header__badge">{activeAlarms.dm.length + activeAlarms.dai.length} actives</span>
+          </header>
           <VisualAlarmPanel scenario={scenario} activeAlarms={activeAlarms} />
-        </div>
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          <Button
-            onClick={ack}
-            className="bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
-            disabled={!canAck}
-            title={canAck ? undefined : 'Accès SSI 1 requis'}
-          >
-            Acquitter
-          </Button>
-          <Button
-            onClick={reset}
-            className="bg-sky-100 text-sky-700 hover:bg-sky-200"
-            disabled={!canReset}
-            title={canReset ? undefined : 'Accès SSI 2 requis'}
-          >
-            Réarmement
-          </Button>
-          <Button
-            onClick={stopUGA}
-            className="bg-amber-100 text-amber-700 hover:bg-amber-200"
-            disabled={!canStopUGA}
-            title={canStopUGA ? undefined : 'Accès SSI 2 requis'}
-          >
-            Arrêt évacuation
-          </Button>
-          <Button
-            className="bg-slate-200 text-slate-700"
-            onClick={() => alert('Test lampes enclenché')}
-            disabled={!canTest}
-            title={canTest ? undefined : 'Accès SSI 1 requis'}
-          >
-            Test lampes
-          </Button>
-        </div>
-        <div className="mt-4 space-y-2">
-          <TemporisationBar label="Temporisation T1" value={session?.t1Remaining} max={session?.t1} />
-          <TemporisationBar label="Temporisation T2" value={session?.t2Remaining} max={session?.t2} />
-        </div>
-        <div className="mt-4 text-xs text-slate-500">
-          Connexion : {connectionStatus}
-        </div>
-        <div className="mt-2 text-xs text-slate-500">État machine CMSI : {String(cmsiSnapshot.value)}</div>
-      </Card>
-      <div className="md:col-span-2 space-y-4">
-        <Synoptic scenario={scenario} />
-        <OutOfServicePanel
-          scenario={scenario}
-          outOfService={outOfService}
-          accessLevel={accessLevel}
-          onToggle={onToggleOutOfService}
-        />
+        </section>
+        <section className="ssi-module">
+          <header className="ssi-section-header">
+            <span className="ssi-section-header__title">Gestion des organes</span>
+            <span className="ssi-section-header__subtitle">
+              {authorizedServiceToggle ? 'Commandes disponibles' : 'Accès SSI 3 requis'}
+            </span>
+          </header>
+          <div className="ssi-service-grid">
+            <div className="ssi-service-column">
+              <h4>Zones de détection</h4>
+              {scenario ? (
+                <ul>
+                  {scenario.zd.map((zone) => {
+                    const isOut = outOfService.zd.includes(zone.id);
+                    return (
+                      <li key={zone.id} className={`ssi-service-card ${isOut ? 'ssi-service-card--out' : ''}`}>
+                        <div className="ssi-service-card__info">
+                          <span className="ssi-service-card__id">ZD {zone.id}</span>
+                          <span className="ssi-service-card__label">{zone.name}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="ssi-service-card__action"
+                          disabled={!authorizedServiceToggle}
+                          onClick={() =>
+                            onToggleOutOfService('zd', zone.id, !isOut, zone.name)
+                          }
+                          title={authorizedServiceToggle ? undefined : 'Accès SSI 3 requis'}
+                        >
+                          {isOut ? 'Remettre en service' : 'Mettre HS'}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="ssi-placeholder">En attente d'un scénario…</p>
+              )}
+            </div>
+            <div className="ssi-service-column">
+              <h4>DAS associés</h4>
+              {scenario ? (
+                <ul>
+                  {scenario.das.map((das) => {
+                    const isOut = outOfService.das.includes(das.id);
+                    return (
+                      <li key={das.id} className={`ssi-service-card ${isOut ? 'ssi-service-card--out' : ''}`}>
+                        <div className="ssi-service-card__info">
+                          <span className="ssi-service-card__id">{das.type}</span>
+                          <span className="ssi-service-card__label">{das.name}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="ssi-service-card__action"
+                          disabled={!authorizedServiceToggle}
+                          onClick={() =>
+                            onToggleOutOfService('das', das.id, !isOut, das.name)
+                          }
+                          title={authorizedServiceToggle ? undefined : 'Accès SSI 3 requis'}
+                        >
+                          {isOut ? 'Remettre en service' : 'Mettre HS'}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="ssi-placeholder">Aucun DAS chargé.</p>
+              )}
+            </div>
+          </div>
+        </section>
+      </div>
+      <div className="ssi-panel__column ssi-panel__column--right">
+        <section className="ssi-module ssi-module--synoptic">
+          <header className="ssi-section-header">
+            <span className="ssi-section-header__title">Synoptique</span>
+            <span className="ssi-section-header__subtitle">
+              {scenario ? `${scenario.zd.length} zones / ${scenario.das.length} DAS` : 'Inactif'}
+            </span>
+          </header>
+          {scenario ? (
+            <div className="ssi-synoptic-screen">
+              <div>
+                <h4>Zones surveillées</h4>
+                <ul>
+                  {scenario.zd.map((zone) => (
+                    <li key={zone.id}>
+                      <span>{zone.name}</span>
+                      {outOfService.zd.includes(zone.id) && <span className="ssi-tag">HS</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <h4>DAS</h4>
+                <ul>
+                  {scenario.das.map((das) => (
+                    <li key={das.id}>
+                      <span>{das.name}</span>
+                      <span className="ssi-sub">{dasStatus[das.id] ?? das.status}</span>
+                      {outOfService.das.includes(das.id) && <span className="ssi-tag">HS</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : (
+            <div className="ssi-synoptic-placeholder">Aucun scénario en cours</div>
+          )}
+        </section>
+        <section className="ssi-module">
+          <header className="ssi-section-header">
+            <span className="ssi-section-header__title">Derniers événements</span>
+            <span className="ssi-section-header__subtitle">{timeline.length} enregistrés</span>
+          </header>
+          <div className="ssi-timeline">
+            {lastEvents.length === 0 && <p className="ssi-placeholder">En attente d'événements…</p>}
+            {lastEvents.map((event) => (
+              <div key={event.id} className="ssi-timeline__item">
+                <span className="ssi-timeline__time">
+                  {new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
+                <span className="ssi-timeline__label">{event.message}</span>
+              </div>
+            ))}
+          </div>
+        </section>
       </div>
     </div>
   );
@@ -853,9 +844,9 @@ const App = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 p-6">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+    <div className="min-h-screen bg-[#dfe3ee] p-6 md:p-12">
+      <div className="mx-auto max-w-6xl space-y-8">
+        <header className="flex flex-col gap-4 rounded-2xl border border-white/60 bg-white/60 p-6 shadow-lg shadow-slate-900/10 backdrop-blur md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-3xl font-bold text-slate-800">Poste Apprenant CMSI</h1>
             <p className="text-slate-500">
