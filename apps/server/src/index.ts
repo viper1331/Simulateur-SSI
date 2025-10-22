@@ -51,6 +51,7 @@ interface SessionState {
   ackTimestamp?: number;
   outOfService: { zd: string[]; das: string[] };
   activeAlarms: { dm: string[]; dai: string[] };
+  accessLevel: AccessLevel;
 }
 
 interface Session {
@@ -73,6 +74,7 @@ type ClientMessage =
       scenario?: Scenario;
     }
   | { type: 'TRIGGER_EVENT'; sessionId: string; event: ScenarioEvent }
+  | { type: 'SET_ACCESS_LEVEL'; sessionId: string; level: AccessLevel; trainerId: string }
   | { type: 'ACK'; sessionId: string; userId: string }
   | { type: 'RESET'; sessionId: string; userId: string }
   | { type: 'UGA_STOP'; sessionId: string; userId: string }
@@ -220,7 +222,8 @@ const ensureSession = (sessionId: string): Session => {
         score: 0,
         awaitingReset: false,
         outOfService: { zd: [], das: [] },
-        activeAlarms: { dm: [], dai: [] }
+        activeAlarms: { dm: [], dai: [] },
+        accessLevel: 0
       }
     };
     sessions.set(sessionId, session);
@@ -352,7 +355,8 @@ const handleMessage = async (ws: WebSocket, message: ClientMessage) => {
         ackTimestamp: undefined,
         id: session.state.id,
         outOfService: { zd: [], das: [] },
-        activeAlarms: { dm: [], dai: [] }
+        activeAlarms: { dm: [], dai: [] },
+        accessLevel: 0
       };
       addTimeline(session, `Scénario "${scenario.name}" démarré`, 'system');
       const run = await prisma.run.create({
@@ -365,6 +369,25 @@ const handleMessage = async (ws: WebSocket, message: ClientMessage) => {
       });
       session.state.runId = run.id;
       await persistAction(session, 'START_SCENARIO', { scenarioId: scenario.id });
+      broadcast(session);
+      break;
+    }
+    case 'SET_ACCESS_LEVEL': {
+      const session = ensureSession(message.sessionId);
+      const nextLevel = Math.max(0, Math.min(message.level, 3)) as AccessLevel;
+      session.state.accessLevel = nextLevel;
+      const label = getAccessLevelLabel(nextLevel);
+      addTimeline(
+        session,
+        nextLevel === 0
+          ? 'Accès SSI verrouillé par le formateur'
+          : `Niveau d'accès ${label} activé par le formateur`,
+        'action'
+      );
+      await persistAction(session, 'SET_ACCESS_LEVEL', {
+        trainerId: message.trainerId,
+        level: nextLevel
+      });
       broadcast(session);
       break;
     }
@@ -447,6 +470,7 @@ const handleMessage = async (ws: WebSocket, message: ClientMessage) => {
       session.state.cmsiPhase = 'idle';
       session.state.ugaActive = false;
       session.state.activeAlarms = { dm: [], dai: [] };
+      session.state.accessLevel = 0;
       addTimeline(session, 'Scénario arrêté', 'system');
       if (session.state.runId) {
         await prisma.run.update({

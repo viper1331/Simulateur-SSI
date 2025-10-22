@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Scenario, ScenarioEvent } from '@ssi/shared-models';
+import type { AccessLevel, Scenario, ScenarioEvent } from '@ssi/shared-models';
 
 type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error';
 
@@ -22,6 +22,7 @@ type SessionSnapshot = {
   ackTimestamp?: number;
   outOfService: { zd: string[]; das: string[] };
   activeAlarms: { dm: string[]; dai: string[] };
+  accessLevel: AccessLevel;
 };
 
 type SessionStore = {

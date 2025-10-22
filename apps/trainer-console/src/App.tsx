@@ -482,6 +482,87 @@ const ScenarioDetails = ({ scenario }: { scenario?: Scenario }) => {
   );
 };
 
+const AccessManagementPanel = () => {
+  const { session, setAccessLevel } = useTrainerStore((state) => ({
+    session: state.session,
+    setAccessLevel: state.setAccessLevel
+  }));
+  const currentLevel = session?.accessLevel ?? 0;
+  const [feedback, setFeedback] = useState<string | undefined>();
+  const [feedbackTone, setFeedbackTone] = useState<'ok' | 'warning'>('warning');
+  const quickLevels = [1, 2, 3] as const;
+
+  const handleActivate = (level: Exclude<AccessLevel, 0>) => {
+    setAccessLevel(level);
+    setFeedback(`Niveau ${ACCESS_LEVELS[level].label} activé`);
+    setFeedbackTone('ok');
+  };
+
+  const handleLock = () => {
+    setAccessLevel(0);
+    setFeedback('Accès SSI verrouillé');
+    setFeedbackTone('warning');
+  };
+
+  return (
+    <Card title="Gestion des accès SSI">
+      <div className="space-y-3 text-sm text-slate-600">
+        <div className="flex items-center justify-between">
+          <span>Niveau actif</span>
+          <Indicator
+            label={ACCESS_LEVELS[currentLevel].label}
+            tone={currentLevel === 0 ? 'warning' : 'ok'}
+            active
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {quickLevels.map((level) => (
+            <Button
+              key={level}
+              onClick={() => handleActivate(level)}
+              disabled={currentLevel === level}
+              className="bg-indigo-100 text-indigo-700 hover:bg-indigo-200 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Activer {ACCESS_LEVELS[level].label}
+            </Button>
+          ))}
+        </div>
+        <Button onClick={handleLock} className="w-full bg-slate-200 text-slate-700 hover:bg-slate-300">
+          Verrouiller l'accès
+        </Button>
+        {feedback && <Indicator label={feedback} tone={feedbackTone} active />}
+        <div>
+          <h4 className="text-[0.65rem] font-semibold uppercase tracking-widest text-slate-500">Codes disponibles</h4>
+          <ul className="mt-2 space-y-1 text-xs text-slate-500">
+            {ACCESS_CODES.map((item) => (
+              <li key={item.level} className="flex items-center justify-between rounded bg-slate-100 px-2 py-1">
+                <span className="font-semibold text-slate-600">{item.label}</span>
+                <span className="font-mono">{item.code}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div>
+          <h4 className="text-[0.65rem] font-semibold uppercase tracking-widest text-slate-500">Droits associés</h4>
+          <ul className="mt-2 space-y-1 text-xs text-slate-500">
+            {quickLevels.map((level) => (
+              <li
+                key={`rights-${level}`}
+                className={level === currentLevel ? 'text-xs font-semibold text-slate-600' : undefined}
+              >
+                <span className="text-slate-600">{ACCESS_LEVELS[level].label}</span>
+                {': '}
+                {ACCESS_LEVELS[level].rights.join(', ')}
+                {level === currentLevel && <span className="ml-1 text-indigo-600">(actif)</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </Card>
+  );
+};
+
 const TrainerControls = ({ scenario }: { scenario?: Scenario }) => {
   const triggerEvent = useTrainerStore((state) => state.triggerEvent);
   const stopScenario = useTrainerStore((state) => state.stopScenario);
@@ -1267,6 +1348,7 @@ const App = () => {
             <SessionOverview scenario={scenario} />
             <ScorePanel />
             <TraineeMonitoring />
+            <AccessManagementPanel />
             <TrainerControls scenario={scenario} />
           </aside>
 

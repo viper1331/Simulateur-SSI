@@ -161,3 +161,5 @@ export const defaultScenarios: Scenario[] = [
     ]
   }
 ];
+
+export * from './access';
