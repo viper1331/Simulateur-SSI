@@ -41,8 +41,12 @@ declare global {
 }
 
 const metaEnv = (globalThis as any).__VITE_META_ENV__ ?? ({} as Record<string, string>);
-const WS_URL = metaEnv.VITE_SERVER_WS ?? process.env.VITE_SERVER_WS ?? 'ws://localhost:4500';
-const API_URL = metaEnv.VITE_SERVER_API ?? process.env.VITE_SERVER_API ?? 'http://localhost:4500';
+const nodeEnv =
+  typeof process !== 'undefined' && typeof process.env !== 'undefined'
+    ? (process.env as Record<string, string | undefined>)
+    : undefined;
+const WS_URL = metaEnv.VITE_SERVER_WS ?? nodeEnv?.VITE_SERVER_WS ?? 'ws://localhost:4500';
+const API_URL = metaEnv.VITE_SERVER_API ?? nodeEnv?.VITE_SERVER_API ?? 'http://localhost:4500';
 
 let socket: WebSocket | undefined;
 
