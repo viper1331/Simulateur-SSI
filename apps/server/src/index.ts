@@ -11,7 +11,8 @@ import {
   userSchema,
   type AccessLevel,
   type Scenario,
-  type UserRole
+  type UserRole,
+  getAccessLevelLabel
 } from '@ssi/shared-models';
 import { v4 as uuid } from 'uuid';
 import bcrypt from 'bcryptjs';
