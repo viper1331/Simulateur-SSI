@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
 import { useSessionStore } from './store';
 import { Button, Card, Indicator } from '@ssi/ui-kit';
 import { cmsiMachine } from '@ssi/state-machines';
@@ -292,6 +292,104 @@ const AccessLevelStatus = ({
 
 type SessionData = ReturnType<typeof useSessionStore.getState>['session'];
 
+type StatusItem = { label: string; active: boolean; tone: 'danger' | 'warning' | 'ok' };
+
+const buildCmsiStatusItems = (session?: SessionData): StatusItem[] => {
+  const ugaActive = session?.ugaActive ?? false;
+  const dasStatus = session?.dasStatus ?? {};
+  const alimentation = session?.alimentation ?? 'secteur';
+  const outOfService = session?.outOfService ?? { zd: [], das: [] };
+  const cmsiPhase = session?.cmsiPhase ?? 'idle';
+  const outOfServiceCount = outOfService.zd.length + outOfService.das.length;
+  const hasDasIssue = Object.values(dasStatus).some((status) => status !== 'en_position');
+
+  return [
+    { label: 'Alarme feu', active: cmsiPhase === 'preAlerte' || cmsiPhase === 'alerte', tone: 'danger' },
+    { label: 'UGA active', active: ugaActive, tone: 'danger' },
+    { label: 'Défaut alimentation', active: alimentation !== 'secteur', tone: 'warning' },
+    { label: 'Surveillance DAS', active: hasDasIssue, tone: 'warning' },
+    { label: 'Mises hors service', active: outOfServiceCount > 0, tone: 'warning' }
+  ];
+};
+
+const chunk = <T,>(items: T[], size: number): T[][] => {
+  const result: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    result.push(items.slice(index, index + size));
+  }
+  return result;
+};
+
+const EcsPanel = ({
+  scenario,
+  session,
+  sessionId,
+  connectionLabel,
+  connectionTone,
+  statusItems
+}: {
+  scenario?: Scenario;
+  session?: SessionData;
+  sessionId?: string | null;
+  connectionLabel: string;
+  connectionTone: 'ok' | 'warning' | 'danger';
+  statusItems: StatusItem[];
+}) => {
+  const keypadLayout = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '↩', '0', '⌫'];
+  const summaryLines = [
+    `Scénario : ${scenario?.name ?? '—'}`,
+    `Phase : ${(session?.cmsiPhase ?? 'Repos').toString().toUpperCase()}`,
+    `Session : ${sessionId ?? '—'}`,
+    `Zones : ${scenario?.zd.length ?? 0} / DAS : ${scenario?.das.length ?? 0}`
+  ];
+
+  return (
+    <section className="ecs-panel">
+      <header className="ecs-panel__header">
+        <span className="ecs-panel__title">ECS</span>
+        <Indicator label={connectionLabel} tone={connectionTone} active />
+      </header>
+      <div className="ecs-panel__body">
+        <div className="ecs-panel__screen">
+          {summaryLines.map((line) => (
+            <div key={line} className="ecs-panel__line">
+              {line}
+            </div>
+          ))}
+        </div>
+        <div className="ecs-panel__status">
+          {statusItems.map((item) => (
+            <div
+              key={item.label}
+              className={`ecs-led ecs-led--${item.tone} ${item.active ? 'ecs-led--active' : ''}`}
+            >
+              <span className="ecs-led__dot" />
+              <span className="ecs-led__label">{item.label}</span>
+            </div>
+          ))}
+        </div>
+        <div className="ecs-panel__keypad">
+          {keypadLayout.map((key) => (
+            <span key={key} className="ecs-panel__key">
+              {key}
+            </span>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+};
+
+const UaeStation = ({ children }: { children: ReactNode }) => (
+  <section className="uae-station">
+    <header className="uae-station__header">UAE</header>
+    <div className="uae-station__body">
+      <div className="uae-station__monitor">{children}</div>
+      <div className="uae-station__base" />
+    </div>
+  </section>
+);
+
 const ScenarioBriefing = ({ scenario }: { scenario?: Scenario }) => {
   if (!scenario) {
     return (
@@ -430,33 +528,30 @@ const LearningObjectives = ({ score }: { score?: number }) => (
 
 const CmsiFacade = ({
   accessLevel,
+  session,
+  scenario,
+  statusItems,
+  connectionStatus,
+  onAck,
+  onReset,
+  onStopUGA,
   onToggleOutOfService
 }: {
   accessLevel: AccessLevel;
+  session?: SessionData;
+  scenario?: Scenario;
+  statusItems: StatusItem[];
+  connectionStatus: string;
+  onAck: () => void;
+  onReset: () => void;
+  onStopUGA: () => void;
   onToggleOutOfService: (targetType: 'zd' | 'das', targetId: string, active: boolean, label: string) => void;
 }) => {
-  const connect = useSessionStore((state) => state.connect);
-  const connectionStatus = useSessionStore((state) => state.connectionStatus);
-  const session = useSessionStore((state) => state.session);
-  const ack = useSessionStore((state) => state.ack);
-  const reset = useSessionStore((state) => state.reset);
-  const stopUGA = useSessionStore((state) => state.stopUGA);
-  const scenarios = useSessionStore((state) => state.scenarios);
-  const dasStatus = useSessionStore((state) => state.session?.dasStatus ?? {});
-  const sessionId = useSessionStore((state) => state.sessionId);
-
-  useEffect(() => {
-    connect();
-  }, [connect]);
-
-  const scenario = useMemo(() => {
-    if (session?.scenarioDefinition) {
-      return session.scenarioDefinition;
-    }
-    const scenarioId = session?.scenarioId;
-    if (!scenarioId) return undefined;
-    return scenarios.find((scn) => scn.id === scenarioId);
-  }, [session?.scenarioDefinition, scenarios, session?.scenarioId]);
+  const dasStatus = session?.dasStatus ?? {};
+  const outOfService = session?.outOfService ?? { zd: [], das: [] };
+  const activeAlarms = session?.activeAlarms ?? { dm: [], dai: [] };
+  const timeline = session?.timeline ?? [];
+  const lastEvents = timeline.slice(-4).reverse();
 
   const [cmsiSnapshot, sendCmsi] = useMachine(cmsiMachine, { input: undefined });
 
@@ -477,66 +572,55 @@ const CmsiFacade = ({
     }
   }, [session?.cmsiPhase, session?.t1, session?.t2, sendCmsi]);
 
-  const outOfService = session?.outOfService ?? { zd: [], das: [] };
-  const outOfServiceCount = outOfService.zd.length + outOfService.das.length;
-  const activeAlarms = session?.activeAlarms ?? { dm: [], dai: [] };
+  const zoneNameById = useMemo(() => {
+    const mapping = new Map<string, string>();
+    (scenario?.zd ?? []).forEach((zone) => mapping.set(zone.id, zone.name));
+    return mapping;
+  }, [scenario]);
+
+  const detectionMessages = [
+    ...activeAlarms.dm.map(
+      (zoneId) => `DM ${zoneId.toUpperCase()} - ${zoneNameById.get(zoneId) ?? zoneId.toUpperCase()}`
+    ),
+    ...activeAlarms.dai.map(
+      (zoneId) => `DAI ${zoneId.toUpperCase()} - ${zoneNameById.get(zoneId) ?? zoneId.toUpperCase()}`
+    )
+  ];
+
+  const detectionLines = detectionMessages.length > 0 ? chunk(detectionMessages, 2).map((items) => items.join('  |  ')) : [];
+  const connectionLine = `CONNEXION: ${(connectionStatus ?? 'inconnu').toUpperCase()}`;
+  const ledLines = [
+    scenario ? `SCENARIO: ${scenario.name.toUpperCase()}` : 'SCENARIO: AUCUN',
+    `PHASE: ${(session?.cmsiPhase ?? 'REPOS').toString().toUpperCase()}`,
+    detectionLines[0] ?? 'AUCUNE DETECTION EN ALARME',
+    detectionLines[1] ?? connectionLine
+  ];
+
+  const authorizedServiceToggle = accessLevel >= 3;
   const canAck = accessLevel >= 1;
   const canReset = accessLevel >= 2;
   const canStopUGA = accessLevel >= 2;
   const canTest = accessLevel >= 1;
-  const timeline = session?.timeline ?? [];
-  const lastEvents = timeline.slice(-3).reverse();
-
-  const statusItems: Array<{ label: string; active: boolean; tone: 'danger' | 'warning' | 'ok' }> = [
-    { label: 'Alarme feu', active: session?.cmsiPhase === 'preAlerte' || session?.cmsiPhase === 'alerte', tone: 'danger' },
-    { label: 'UGA active', active: session?.ugaActive ?? false, tone: 'danger' },
-    { label: 'Défaut alimentation', active: session?.alimentation !== 'secteur', tone: 'warning' },
-    {
-      label: 'Surveillance DAS',
-      active: Object.values(session?.dasStatus ?? {}).some((status) => status !== 'en_position'),
-      tone: 'warning'
-    },
-    { label: 'Mises hors service', active: outOfServiceCount > 0, tone: 'warning' }
-  ];
-
-  const authorizedServiceToggle = accessLevel >= 3;
 
   return (
-    <div className="ssi-panel">
-      <div className="ssi-panel__column ssi-panel__column--left">
-        <section className="ssi-module ssi-module--controls">
-          <header className="ssi-module__header">
-            <div className="ssi-badge">CMSI Apprenant</div>
-            <span className="ssi-module__subtitle">Catégorie A</span>
-          </header>
-          <div className="ssi-display">
-            <div className="ssi-display__screen">
-              <div className="ssi-display__line ssi-display__line--title">
-                {scenario?.name ?? 'Aucun scénario sélectionné'}
+    <section className="smsi-board">
+      <div className="smsi-board__grid">
+        <div className="smsi-section smsisection--cmsi">
+          <div className="smsi-section__label">CMSI</div>
+          <div className="smsi-led-screen">
+            {ledLines.map((line, index) => (
+              <div key={`led-${index}`} className="smsi-led-screen__line">
+                {line}
               </div>
-              <div className="ssi-display__line">Phase CMSI : {session?.cmsiPhase ?? 'Repos'}</div>
-              <div className="ssi-display__line">Connexion : {connectionStatus}</div>
-              <div className="ssi-display__line">Session : {sessionId ?? '—'}</div>
-            </div>
-            <div className="ssi-display__status">
-              {statusItems.map((item) => (
-                <div
-                  key={item.label}
-                  className={`ssi-led ssi-led--${item.tone} ${item.active ? 'ssi-led--active' : ''}`}
-                >
-                  <span className="ssi-led__dot" />
-                  <span className="ssi-led__label">{item.label}</span>
-                </div>
-              ))}
-            </div>
+            ))}
           </div>
-          <div className="ssi-temporisations">
+          <div className="smsi-timers">
             <TemporisationBar label="Temporisation T1" value={session?.t1Remaining} max={session?.t1} />
             <TemporisationBar label="Temporisation T2" value={session?.t2Remaining} max={session?.t2} />
           </div>
-          <div className="ssi-control-grid">
+          <div className="smsi-controls">
             <Button
-              onClick={ack}
+              onClick={onAck}
               className="ssi-control-button ssi-control-button--ack"
               disabled={!canAck}
               title={canAck ? undefined : 'Accès SSI 1 requis'}
@@ -544,7 +628,7 @@ const CmsiFacade = ({
               Acquitter
             </Button>
             <Button
-              onClick={reset}
+              onClick={onReset}
               className="ssi-control-button ssi-control-button--reset"
               disabled={!canReset}
               title={canReset ? undefined : 'Accès SSI 2 requis'}
@@ -552,7 +636,7 @@ const CmsiFacade = ({
               Réarmement
             </Button>
             <Button
-              onClick={stopUGA}
+              onClick={onStopUGA}
               className="ssi-control-button ssi-control-button--uga"
               disabled={!canStopUGA}
               title={canStopUGA ? undefined : 'Accès SSI 2 requis'}
@@ -568,29 +652,51 @@ const CmsiFacade = ({
               Test lampes
             </Button>
           </div>
-          <footer className="ssi-module__footer">
-            <span className="ssi-module__footer-label">État machine</span>
-            <span className="ssi-module__footer-value">{String(cmsiSnapshot.value)}</span>
-          </footer>
-        </section>
-      </div>
-      <div className="ssi-panel__column ssi-panel__column--center">
-        <section className="ssi-module">
-          <header className="ssi-section-header">
-            <span className="ssi-section-header__title">Signalisations</span>
-            <span className="ssi-section-header__badge">{activeAlarms.dm.length + activeAlarms.dai.length} actives</span>
-          </header>
+          <div className="smsi-section__footer">État machine : {String(cmsiSnapshot.value)}</div>
+        </div>
+        <div className="smsi-section smsisection--uga">
+          <div className="smsi-section__label">UGA</div>
+          <div className="smsi-lights">
+            {statusItems.map((item) => (
+              <div
+                key={item.label}
+                className={`smsi-light smsi-light--${item.tone} ${item.active ? 'smsi-light--active' : ''}`}
+              >
+                <span className="smsi-light__dot" />
+                <span className="smsi-light__label">{item.label}</span>
+              </div>
+            ))}
+          </div>
+          <div className="smsi-events">
+            <h4>Historique récent</h4>
+            {lastEvents.length === 0 ? (
+              <p className="smsi-events__placeholder">En attente d'événements…</p>
+            ) : (
+              <ul>
+                {lastEvents.map((event) => (
+                  <li key={event.id}>
+                    <span className="smsi-events__time">
+                      {new Date(event.timestamp).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit'
+                      })}
+                    </span>
+                    <span className="smsi-events__label">{event.message}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+        <div className="smsi-section smsisection--us">
+          <div className="smsi-section__label">US</div>
           <VisualAlarmPanel scenario={scenario} activeAlarms={activeAlarms} />
-        </section>
-        <section className="ssi-module">
-          <header className="ssi-section-header">
-            <span className="ssi-section-header__title">Gestion des organes</span>
-            <span className="ssi-section-header__subtitle">
-              {authorizedServiceToggle ? 'Commandes disponibles' : 'Accès SSI 3 requis'}
-            </span>
-          </header>
-          <div className="ssi-service-grid">
-            <div className="ssi-service-column">
+        </div>
+        <div className="smsi-section smsisection--ucms">
+          <div className="smsi-section__label">UCMS</div>
+          <div className="smsi-service-columns">
+            <div className="smsi-service-columns__group">
               <h4>Zones de détection</h4>
               {scenario ? (
                 <ul>
@@ -606,9 +712,7 @@ const CmsiFacade = ({
                           type="button"
                           className="ssi-service-card__action"
                           disabled={!authorizedServiceToggle}
-                          onClick={() =>
-                            onToggleOutOfService('zd', zone.id, !isOut, zone.name)
-                          }
+                          onClick={() => onToggleOutOfService('zd', zone.id, !isOut, zone.name)}
                           title={authorizedServiceToggle ? undefined : 'Accès SSI 3 requis'}
                         >
                           {isOut ? 'Remettre en service' : 'Mettre HS'}
@@ -621,7 +725,7 @@ const CmsiFacade = ({
                 <p className="ssi-placeholder">En attente d'un scénario…</p>
               )}
             </div>
-            <div className="ssi-service-column">
+            <div className="smsi-service-columns__group">
               <h4>DAS associés</h4>
               {scenario ? (
                 <ul>
@@ -637,9 +741,7 @@ const CmsiFacade = ({
                           type="button"
                           className="ssi-service-card__action"
                           disabled={!authorizedServiceToggle}
-                          onClick={() =>
-                            onToggleOutOfService('das', das.id, !isOut, das.name)
-                          }
+                          onClick={() => onToggleOutOfService('das', das.id, !isOut, das.name)}
                           title={authorizedServiceToggle ? undefined : 'Accès SSI 3 requis'}
                         >
                           {isOut ? 'Remettre en service' : 'Mettre HS'}
@@ -653,65 +755,68 @@ const CmsiFacade = ({
               )}
             </div>
           </div>
-        </section>
+        </div>
       </div>
-      <div className="ssi-panel__column ssi-panel__column--right">
-        <section className="ssi-module ssi-module--synoptic">
-          <header className="ssi-section-header">
-            <span className="ssi-section-header__title">Synoptique</span>
-            <span className="ssi-section-header__subtitle">
-              {scenario ? `${scenario.zd.length} zones / ${scenario.das.length} DAS` : 'Inactif'}
-            </span>
-          </header>
-          {scenario ? (
-            <div className="ssi-synoptic-screen">
-              <div>
-                <h4>Zones surveillées</h4>
-                <ul>
-                  {scenario.zd.map((zone) => (
-                    <li key={zone.id}>
-                      <span>{zone.name}</span>
-                      {outOfService.zd.includes(zone.id) && <span className="ssi-tag">HS</span>}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <div>
-                <h4>DAS</h4>
-                <ul>
-                  {scenario.das.map((das) => (
-                    <li key={das.id}>
-                      <span>{das.name}</span>
-                      <span className="ssi-sub">{dasStatus[das.id] ?? das.status}</span>
-                      {outOfService.das.includes(das.id) && <span className="ssi-tag">HS</span>}
-                    </li>
-                  ))}
-                </ul>
+      <div className="smsi-section smsisection--details">
+        <div className="smsi-section__label">US détails</div>
+        {scenario ? (
+          <div className="smsi-details-grid">
+            <div className="smsi-details-grid__column">
+              <div className="ssi-synoptic-screen">
+                <div>
+                  <h4>Zones surveillées</h4>
+                  <ul>
+                    {scenario.zd.map((zone) => (
+                      <li key={zone.id}>
+                        <span>{zone.name}</span>
+                        {outOfService.zd.includes(zone.id) && <span className="ssi-tag">HS</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <h4>DAS</h4>
+                  <ul>
+                    {scenario.das.map((das) => (
+                      <li key={das.id}>
+                        <span>{das.name}</span>
+                        <span className="ssi-sub">{dasStatus[das.id] ?? das.status}</span>
+                        {outOfService.das.includes(das.id) && <span className="ssi-tag">HS</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               </div>
             </div>
-          ) : (
-            <div className="ssi-synoptic-placeholder">Aucun scénario en cours</div>
-          )}
-        </section>
-        <section className="ssi-module">
-          <header className="ssi-section-header">
-            <span className="ssi-section-header__title">Derniers événements</span>
-            <span className="ssi-section-header__subtitle">{timeline.length} enregistrés</span>
-          </header>
-          <div className="ssi-timeline">
-            {lastEvents.length === 0 && <p className="ssi-placeholder">En attente d'événements…</p>}
-            {lastEvents.map((event) => (
-              <div key={event.id} className="ssi-timeline__item">
-                <span className="ssi-timeline__time">
-                  {new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                </span>
-                <span className="ssi-timeline__label">{event.message}</span>
+            <div className="smsi-details-grid__column">
+              <div className="smsi-events smsievents--stacked">
+                <h4>Chronologie CMSI</h4>
+                {timeline.length === 0 ? (
+                  <p className="smsi-events__placeholder">Aucun événement enregistré pour le moment.</p>
+                ) : (
+                  <ul>
+                    {timeline.slice(-8).reverse().map((event) => (
+                      <li key={event.id}>
+                        <span className="smsi-events__time">
+                          {new Date(event.timestamp).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit'
+                          })}
+                        </span>
+                        <span className="smsi-events__label">{event.message}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
-            ))}
+            </div>
           </div>
-        </section>
+        ) : (
+          <div className="ssi-synoptic-placeholder">Aucun scénario en cours</div>
+        )}
       </div>
-    </div>
+    </section>
   );
 };
 
@@ -749,6 +854,9 @@ const App = () => {
   const register = useSessionStore((state) => state.register);
   const logout = useSessionStore((state) => state.logout);
   const clearError = useSessionStore((state) => state.clearError);
+  const ack = useSessionStore((state) => state.ack);
+  const reset = useSessionStore((state) => state.reset);
+  const stopUGA = useSessionStore((state) => state.stopUGA);
   const sessionId = useSessionStore((state) => state.sessionId);
   const [activeAccessLevel, setActiveAccessLevel] = useState<AccessLevel>(0);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -770,6 +878,8 @@ const App = () => {
   }, [session?.scenarioDefinition, scenarios, session?.scenarioId]);
 
   const grantedAccessLevel: AccessLevel = session?.accessLevel ?? 0;
+
+  const cmsiStatusItems = useMemo(() => buildCmsiStatusItems(session), [session]);
 
   useEffect(() => {
     setActiveAccessLevel((current) => (current > grantedAccessLevel ? grantedAccessLevel : current));
@@ -925,46 +1035,68 @@ const App = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#dfe3ee] p-6 md:p-12">
-      <div className="mx-auto max-w-6xl space-y-8">
-        <header className="flex flex-col gap-4 rounded-2xl border border-white/60 bg-white/60 p-6 shadow-lg shadow-slate-900/10 backdrop-blur md:flex-row md:items-center md:justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-slate-800">Poste Apprenant CMSI</h1>
-            <p className="text-slate-500">
-              Version {__APP_VERSION__} – entraînez-vous à l'exploitation d'un SSI de catégorie A.
-            </p>
-          </div>
-          <div className="flex flex-col items-start gap-3 text-sm text-slate-600 md:items-end">
-            <Indicator label={connectionLabel} tone={connectionTone} active />
-            <div className="text-right">
-              <div className="font-semibold text-slate-700">{auth.user.name}</div>
-              <div className="text-xs text-slate-500">{auth.user.email}</div>
-              {sessionId && <div className="text-xs text-slate-400">Session : {sessionId}</div>}
-            </div>
-            <Button className="bg-slate-200 text-slate-700 hover:bg-slate-300" onClick={logout}>
-              Se déconnecter
-            </Button>
-          </div>
-        </header>
-        <AccessLevelStatus
-          grantedLevel={grantedAccessLevel}
-          activeLevel={activeAccessLevel}
-          onActivate={handleActivateAccessLevel}
-          onRelease={handleReleaseAccessLevel}
-        />
-        <CmsiFacade accessLevel={activeAccessLevel} onToggleOutOfService={handleOutOfServiceToggle} />
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <ScenarioBriefing scenario={scenario} />
-          <ActionChecklist session={session} />
+    <div className="trainee-shell">
+      <header className="trainee-shell__banner">
+        <div>
+          <h1 className="trainee-shell__title">Poste Apprenant CMSI</h1>
+          <p className="trainee-shell__subtitle">
+            Version {__APP_VERSION__} – entraînez-vous à l'exploitation d'un SSI de catégorie A.
+          </p>
         </div>
-        <Dashboard scenario={scenario} />
-        {session?.trainerId && (
-          <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">
-            Formateur connecté : <span className="font-semibold text-slate-700">{session.trainerId}</span>
+        <div className="trainee-shell__meta">
+          <Indicator label={connectionLabel} tone={connectionTone} active />
+          <div className="trainee-shell__user">
+            <span className="trainee-shell__user-name">{auth.user.name}</span>
+            <span className="trainee-shell__user-mail">{auth.user.email}</span>
+            {sessionId && <span className="trainee-shell__session">Session : {sessionId}</span>}
           </div>
-        )}
-        <Buzzer active={session?.ugaActive ?? false} />
-      </div>
+          <Button className="trainee-shell__logout" onClick={logout}>
+            Se déconnecter
+          </Button>
+        </div>
+      </header>
+      <main className="trainee-shell__content">
+        <EcsPanel
+          scenario={scenario}
+          session={session}
+          sessionId={sessionId}
+          connectionLabel={connectionLabel}
+          connectionTone={connectionTone}
+          statusItems={cmsiStatusItems}
+        />
+        <div className="trainee-shell__grid">
+          <CmsiFacade
+            accessLevel={activeAccessLevel}
+            session={session}
+            scenario={scenario}
+            statusItems={cmsiStatusItems}
+            connectionStatus={connectionStatus}
+            onAck={ack}
+            onReset={reset}
+            onStopUGA={stopUGA}
+            onToggleOutOfService={handleOutOfServiceToggle}
+          />
+          <UaeStation>
+            <AccessLevelStatus
+              grantedLevel={grantedAccessLevel}
+              activeLevel={activeAccessLevel}
+              onActivate={handleActivateAccessLevel}
+              onRelease={handleReleaseAccessLevel}
+            />
+            <div className="uae-station__grid">
+              <ScenarioBriefing scenario={scenario} />
+              <ActionChecklist session={session} />
+            </div>
+            <Dashboard scenario={scenario} />
+            {session?.trainerId && (
+              <div className="uae-station__trainer">
+                Formateur connecté : <span>{session.trainerId}</span>
+              </div>
+            )}
+          </UaeStation>
+        </div>
+      </main>
+      <Buzzer active={session?.ugaActive ?? false} />
     </div>
   );
 };
