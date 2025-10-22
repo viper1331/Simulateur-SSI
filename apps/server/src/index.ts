@@ -49,6 +49,7 @@ interface SessionState {
   alarmStartedAt?: number;
   ackTimestamp?: number;
   outOfService: { zd: string[]; das: string[] };
+  activeAlarms: { dm: string[]; dai: string[] };
 }
 
 interface Session {
@@ -209,7 +210,8 @@ const ensureSession = (sessionId: string): Session => {
         timeline: [],
         score: 0,
         awaitingReset: false,
-        outOfService: { zd: [], das: [] }
+        outOfService: { zd: [], das: [] },
+        activeAlarms: { dm: [], dai: [] }
       }
     };
     sessions.set(sessionId, session);
@@ -269,6 +271,18 @@ const handleTriggerEvent = async (session: Session, event: ScenarioEvent) => {
       session.state.t2Remaining = session.state.t2;
       session.state.alarmStartedAt = Date.now();
       session.state.awaitingReset = true;
+      {
+        const zoneId = typeof event.payload?.zdId === 'string' ? (event.payload.zdId as string) : undefined;
+        if (zoneId) {
+          const key = event.type === 'ALARME_DM' ? 'dm' : 'dai';
+          const current = new Set(session.state.activeAlarms[key]);
+          current.add(zoneId);
+          session.state.activeAlarms = {
+            ...session.state.activeAlarms,
+            [key]: Array.from(current)
+          };
+        }
+      }
       scheduleTick(session.state.id);
       break;
     case 'DEFAUT_LIGNE':
@@ -328,7 +342,8 @@ const handleMessage = async (ws: WebSocket, message: ClientMessage) => {
         alarmStartedAt: undefined,
         ackTimestamp: undefined,
         id: session.state.id,
-        outOfService: { zd: [], das: [] }
+        outOfService: { zd: [], das: [] },
+        activeAlarms: { dm: [], dai: [] }
       };
       addTimeline(session, `Scénario "${scenario.name}" démarré`, 'system');
       const run = await prisma.run.create({
@@ -369,6 +384,7 @@ const handleMessage = async (ws: WebSocket, message: ClientMessage) => {
       session.state.dasStatus = Object.fromEntries(Object.keys(session.state.dasStatus).map((id) => [id, 'en_position']));
       session.state.t1Remaining = session.state.t1;
       session.state.t2Remaining = session.state.t2;
+      session.state.activeAlarms = { dm: [], dai: [] };
       addTimeline(session, 'Réarmement effectué', 'action');
       await persistAction(session, 'RESET', { userId: message.userId });
       await evaluateSequence(session);
@@ -418,6 +434,10 @@ const handleMessage = async (ws: WebSocket, message: ClientMessage) => {
       if (session.state.awaitingReset) {
         await updateScore(session, 'Absence de réarmement', -10);
       }
+      session.state.awaitingReset = false;
+      session.state.cmsiPhase = 'idle';
+      session.state.ugaActive = false;
+      session.state.activeAlarms = { dm: [], dai: [] };
       addTimeline(session, 'Scénario arrêté', 'system');
       if (session.state.runId) {
         await prisma.run.update({
