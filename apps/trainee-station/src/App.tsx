@@ -1,20 +1,12 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useSessionStore } from './store';
 import { Button, Card, Indicator } from '@ssi/ui-kit';
 import { cmsiMachine } from '@ssi/state-machines';
 import { useMachine } from '@xstate/react';
-import type { Scenario } from '@ssi/shared-models';
-import { initialScoreRules } from '@ssi/shared-models';
-
-type AccessLevel = 0 | 1 | 2 | 3;
+import type { AccessLevel, Scenario } from '@ssi/shared-models';
+import { ACCESS_LEVELS, initialScoreRules } from '@ssi/shared-models';
 
 type ActiveAlarms = { dm: string[]; dai: string[] };
-
-const ACCESS_CODES: Array<{ level: Exclude<AccessLevel, 0>; code: string; label: string }> = [
-  { level: 1, code: '1111', label: 'SSI 1' },
-  { level: 2, code: '2222', label: 'SSI 2' },
-  { level: 3, code: '3333', label: 'SSI 3' }
-];
 
 const Buzzer = ({ active }: { active: boolean }) => {
   useEffect(() => {
@@ -138,89 +130,37 @@ const Timeline = () => {
   );
 };
 
-const AccessControlPanel = ({
-  accessLevel,
-  onUnlock,
-  onLock
-}: {
-  accessLevel: AccessLevel;
-  onUnlock: (level: Exclude<AccessLevel, 0>) => void;
-  onLock: () => void;
-}) => {
-  const [code, setCode] = useState('');
-  const [feedback, setFeedback] = useState<string | undefined>();
-  const [isError, setIsError] = useState(false);
-
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const normalized = code.trim();
-    const entry = ACCESS_CODES.find((item) => item.code === normalized);
-    if (entry) {
-      if (entry.level > accessLevel) {
-        onUnlock(entry.level);
-        setFeedback(`${entry.label} activé`);
-      } else if (entry.level === accessLevel) {
-        setFeedback(`${entry.label} déjà actif`);
-      } else {
-        setFeedback('Un niveau supérieur est déjà actif');
-      }
-      setIsError(false);
-    } else {
-      setFeedback('Code invalide.');
-      setIsError(true);
-    }
-    setCode('');
-  };
-
-  const currentLabel = accessLevel === 0 ? 'Aucun accès actif' : `Niveau SSI ${accessLevel}`;
-  const currentTone = accessLevel === 0 ? 'warning' : 'ok';
+const AccessLevelStatus = ({ accessLevel }: { accessLevel: AccessLevel }) => {
+  const tone = accessLevel === 0 ? 'warning' : 'ok';
+  const managedLevels = [1, 2, 3] as const;
 
   return (
     <Card title="Accès SSI">
       <div className="space-y-3 text-sm text-slate-600">
         <div className="flex items-center justify-between">
           <span>Niveau actuel</span>
-          <Indicator label={currentLabel} tone={currentTone} active />
+          <Indicator label={ACCESS_LEVELS[accessLevel].label} tone={tone} active />
         </div>
-        <form onSubmit={handleSubmit} className="space-y-2">
-          <label htmlFor="access-code" className="block text-xs font-semibold uppercase text-slate-500">
-            Code d'accès
-          </label>
-          <div className="flex gap-2">
-            <input
-              id="access-code"
-              type="password"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              value={code}
-              onChange={(event) => setCode(event.target.value)}
-              placeholder="Saisir le code"
-              autoComplete="off"
-            />
-            <Button type="submit" className="bg-indigo-600 text-white hover:bg-indigo-700">
-              Valider
-            </Button>
-          </div>
-        </form>
-        {accessLevel > 0 && (
-          <Button onClick={onLock} className="w-full bg-slate-200 text-slate-700 hover:bg-slate-300">
-            Verrouiller l'accès
-          </Button>
-        )}
-        {feedback && (
-          <p className={`text-xs ${isError ? 'text-rose-600' : 'text-emerald-600'}`}>{feedback}</p>
-        )}
+        <p className="text-xs text-slate-500">
+          {accessLevel === 0
+            ? "En attente d'une activation par le formateur."
+            : `Le niveau ${ACCESS_LEVELS[accessLevel].label} a été autorisé par le formateur.`}
+        </p>
         <div>
           <h4 className="text-xs font-semibold uppercase text-slate-500">Droits par niveau</h4>
           <ul className="mt-2 space-y-1 text-xs text-slate-500">
-            <li>
-              <span className="font-semibold text-slate-600">SSI 1</span> : acquittement et tests visuels.
-            </li>
-            <li>
-              <span className="font-semibold text-slate-600">SSI 2</span> : réarmement CMSI et arrêt UGA.
-            </li>
-            <li>
-              <span className="font-semibold text-slate-600">SSI 3</span> : gestion des mises hors service.
-            </li>
+            {managedLevels.map((level) => {
+              const rights = ACCESS_LEVELS[level].rights;
+              const isActive = level === accessLevel;
+              return (
+                <li key={level} className={isActive ? 'text-xs font-semibold text-slate-600' : undefined}>
+                  <span className="text-slate-600">{ACCESS_LEVELS[level].label}</span>
+                  {': '}
+                  {rights.length > 0 ? rights.join(', ') : 'Aucun droit spécifique.'}
+                  {isActive && <span className="ml-2 text-indigo-600">(actif)</span>}
+                </li>
+              );
+            })}
           </ul>
         </div>
       </div>
@@ -382,65 +322,6 @@ const Synoptic = ({ scenario }: { scenario?: Scenario }) => {
               </li>
             ))}
           </ul>
-        </div>
-      </div>
-    </Card>
-  );
-};
-
-const PeripheralPanel = ({ scenario }: { scenario?: Scenario }) => {
-  const triggerEvent = useSessionStore((state) => state.triggerEvent);
-
-  if (!scenario) {
-    return null;
-  }
-
-  return (
-    <Card title="Périphériques SDI">
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <h4 className="text-xs font-semibold uppercase text-slate-500">Déclencheurs manuels</h4>
-          <div className="mt-2 space-y-2">
-            {scenario.zd.map((zone: Scenario['zd'][number]) => (
-              <Button
-                key={zone.id}
-                className="w-full bg-red-100 text-red-700 hover:bg-red-200"
-                onClick={() =>
-                  triggerEvent({
-                    id: `dm-${zone.id}`,
-                    scenarioId: scenario.id,
-                    timestamp: Date.now(),
-                    type: 'ALARME_DM',
-                    payload: { zdId: zone.id }
-                  })
-                }
-              >
-                DM {zone.name}
-              </Button>
-            ))}
-          </div>
-        </div>
-        <div>
-          <h4 className="text-xs font-semibold uppercase text-slate-500">Détecteurs automatiques</h4>
-          <div className="mt-2 space-y-2">
-            {scenario.zd.map((zone: Scenario['zd'][number]) => (
-              <Button
-                key={`dai-${zone.id}`}
-                className="w-full bg-amber-100 text-amber-700 hover:bg-amber-200"
-                onClick={() =>
-                  triggerEvent({
-                    id: `dai-${zone.id}`,
-                    scenarioId: scenario.id,
-                    timestamp: Date.now(),
-                    type: 'ALARME_DAI',
-                    payload: { zdId: zone.id }
-                  })
-                }
-              >
-                DAI {zone.name}
-              </Button>
-            ))}
-          </div>
         </div>
       </div>
     </Card>
@@ -696,7 +577,6 @@ const CmsiFacade = ({
       </Card>
       <div className="md:col-span-2 space-y-4">
         <Synoptic scenario={scenario} />
-        <PeripheralPanel scenario={scenario} />
         <OutOfServicePanel
           scenario={scenario}
           outOfService={outOfService}
@@ -734,19 +614,12 @@ const App = () => {
   const session = useSessionStore((state) => state.session);
   const scenarios = useSessionStore((state) => state.scenarios);
   const setOutOfService = useSessionStore((state) => state.setOutOfService);
-  const [accessLevel, setAccessLevel] = useState<AccessLevel>(0);
   const scenario = useMemo(() => {
     if (!session?.scenarioId) return undefined;
     return scenarios.find((item) => item.id === session.scenarioId);
   }, [scenarios, session?.scenarioId]);
 
-  const handleUnlockAccess = (level: Exclude<AccessLevel, 0>) => {
-    setAccessLevel((current) => (level > current ? level : current));
-  };
-
-  const handleLockAccess = () => {
-    setAccessLevel(0);
-  };
+  const accessLevel = session?.accessLevel ?? 0;
 
   const handleOutOfServiceToggle = (
     targetType: 'zd' | 'das',
@@ -764,7 +637,7 @@ const App = () => {
           <h1 className="text-3xl font-bold text-slate-800">Poste Apprenant CMSI</h1>
           <p className="text-slate-500">Version {__APP_VERSION__} – entraînez-vous à l'exploitation d'un SSI de catégorie A.</p>
         </header>
-        <AccessControlPanel accessLevel={accessLevel} onUnlock={handleUnlockAccess} onLock={handleLockAccess} />
+        <AccessLevelStatus accessLevel={accessLevel} />
         <CmsiFacade accessLevel={accessLevel} onToggleOutOfService={handleOutOfServiceToggle} />
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <ScenarioBriefing scenario={scenario} />
