@@ -5,5 +5,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5301
+  },
+  define: {
+    __APP_VERSION__: JSON.stringify('0.1.0')
   }
 });
