@@ -20,6 +20,7 @@ type SessionSnapshot = {
   awaitingReset: boolean;
   alarmStartedAt?: number;
   ackTimestamp?: number;
+  outOfService: { zd: string[]; das: string[] };
 };
 
 type TrainerStore = {

@@ -20,6 +20,7 @@ type SessionSnapshot = {
   awaitingReset: boolean;
   alarmStartedAt?: number;
   ackTimestamp?: number;
+  outOfService: { zd: string[]; das: string[] };
 };
 
 type SessionStore = {
@@ -32,6 +33,12 @@ type SessionStore = {
   ack: () => void;
   reset: () => void;
   stopUGA: () => void;
+  setOutOfService: (options: {
+    targetType: 'zd' | 'das';
+    targetId: string;
+    active: boolean;
+    label?: string;
+  }) => void;
   triggerEvent: (event: ScenarioEvent) => void;
 };
 
@@ -104,6 +111,20 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   stopUGA: () => {
     const { sessionId, userId } = get();
     socket?.send(JSON.stringify({ type: 'UGA_STOP', sessionId, userId }));
+  },
+  setOutOfService: ({ targetType, targetId, active, label }) => {
+    const { sessionId, userId } = get();
+    socket?.send(
+      JSON.stringify({
+        type: 'SET_OUT_OF_SERVICE',
+        sessionId,
+        userId,
+        targetType,
+        targetId,
+        active,
+        label
+      })
+    );
   },
   triggerEvent: (event) => {
     const { sessionId } = get();

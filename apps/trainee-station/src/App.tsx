@@ -1,10 +1,18 @@
-import { useEffect, useMemo } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useSessionStore } from './store';
 import { Button, Card, Indicator } from '@ssi/ui-kit';
 import { cmsiMachine } from '@ssi/state-machines';
 import { useMachine } from '@xstate/react';
 import type { Scenario } from '@ssi/shared-models';
 import { initialScoreRules } from '@ssi/shared-models';
+
+type AccessLevel = 0 | 1 | 2 | 3;
+
+const ACCESS_CODES: Array<{ level: Exclude<AccessLevel, 0>; code: string; label: string }> = [
+  { level: 1, code: '1111', label: 'SSI 1' },
+  { level: 2, code: '2222', label: 'SSI 2' },
+  { level: 3, code: '3333', label: 'SSI 3' }
+];
 
 const Buzzer = ({ active }: { active: boolean }) => {
   useEffect(() => {
@@ -59,8 +67,207 @@ const Timeline = () => {
   );
 };
 
+const AccessControlPanel = ({
+  accessLevel,
+  onUnlock,
+  onLock
+}: {
+  accessLevel: AccessLevel;
+  onUnlock: (level: Exclude<AccessLevel, 0>) => void;
+  onLock: () => void;
+}) => {
+  const [code, setCode] = useState('');
+  const [feedback, setFeedback] = useState<string | undefined>();
+  const [isError, setIsError] = useState(false);
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const normalized = code.trim();
+    const entry = ACCESS_CODES.find((item) => item.code === normalized);
+    if (entry) {
+      if (entry.level > accessLevel) {
+        onUnlock(entry.level);
+        setFeedback(`${entry.label} activé`);
+      } else if (entry.level === accessLevel) {
+        setFeedback(`${entry.label} déjà actif`);
+      } else {
+        setFeedback('Un niveau supérieur est déjà actif');
+      }
+      setIsError(false);
+    } else {
+      setFeedback('Code invalide.');
+      setIsError(true);
+    }
+    setCode('');
+  };
+
+  const currentLabel = accessLevel === 0 ? 'Aucun accès actif' : `Niveau SSI ${accessLevel}`;
+  const currentTone = accessLevel === 0 ? 'warning' : 'ok';
+
+  return (
+    <Card title="Accès SSI">
+      <div className="space-y-3 text-sm text-slate-600">
+        <div className="flex items-center justify-between">
+          <span>Niveau actuel</span>
+          <Indicator label={currentLabel} tone={currentTone} active />
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-2">
+          <label htmlFor="access-code" className="block text-xs font-semibold uppercase text-slate-500">
+            Code d'accès
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="access-code"
+              type="password"
+              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              placeholder="Saisir le code"
+              autoComplete="off"
+            />
+            <Button type="submit" className="bg-indigo-600 text-white hover:bg-indigo-700">
+              Valider
+            </Button>
+          </div>
+        </form>
+        {accessLevel > 0 && (
+          <Button onClick={onLock} className="w-full bg-slate-200 text-slate-700 hover:bg-slate-300">
+            Verrouiller l'accès
+          </Button>
+        )}
+        {feedback && (
+          <p className={`text-xs ${isError ? 'text-rose-600' : 'text-emerald-600'}`}>{feedback}</p>
+        )}
+        <div>
+          <h4 className="text-xs font-semibold uppercase text-slate-500">Droits par niveau</h4>
+          <ul className="mt-2 space-y-1 text-xs text-slate-500">
+            <li>
+              <span className="font-semibold text-slate-600">SSI 1</span> : acquittement et tests visuels.
+            </li>
+            <li>
+              <span className="font-semibold text-slate-600">SSI 2</span> : réarmement CMSI et arrêt UGA.
+            </li>
+            <li>
+              <span className="font-semibold text-slate-600">SSI 3</span> : gestion des mises hors service.
+            </li>
+          </ul>
+        </div>
+      </div>
+    </Card>
+  );
+};
+
+const OutOfServicePanel = ({
+  scenario,
+  outOfService,
+  accessLevel,
+  onToggle
+}: {
+  scenario?: Scenario;
+  outOfService?: { zd: string[]; das: string[] };
+  accessLevel: AccessLevel;
+  onToggle: (targetType: 'zd' | 'das', targetId: string, active: boolean, label: string) => void;
+}) => {
+  const authorized = accessLevel >= 3;
+  if (!scenario) {
+    return (
+      <Card title="Gestion des mises hors service">
+        <p className="text-sm text-slate-500">En attente du lancement d'un scénario pour gérer les organes.</p>
+      </Card>
+    );
+  }
+
+  const zoneOut = new Set(outOfService?.zd ?? []);
+  const dasOut = new Set(outOfService?.das ?? []);
+
+  return (
+    <Card title="Gestion des mises hors service">
+      {!authorized && (
+        <p className="text-xs text-amber-600">
+          Accès SSI 3 requis pour modifier l'état des zones ou des DAS.
+        </p>
+      )}
+      <div className="mt-3 space-y-4 text-sm text-slate-600">
+        <div>
+          <h4 className="text-xs font-semibold uppercase text-slate-500">Zones de détection</h4>
+          <div className="mt-2 space-y-2">
+            {scenario.zd.map((zone) => {
+              const isOut = zoneOut.has(zone.id);
+              const actionLabel = isOut ? 'Remettre en service' : 'Mettre hors service';
+              const actionTone = isOut
+                ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                : 'bg-rose-100 text-rose-700 hover:bg-rose-200';
+              return (
+                <div key={zone.id} className="rounded border border-slate-200 bg-white p-2">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-700">{zone.name}</div>
+                      <div className="text-xs text-slate-500">ZD {zone.id}</div>
+                    </div>
+                    <Indicator label={isOut ? 'Hors service' : 'En service'} tone={isOut ? 'warning' : 'ok'} active />
+                  </div>
+                  <div className="mt-2 flex justify-end">
+                    <Button
+                      disabled={!authorized}
+                      onClick={() => onToggle('zd', zone.id, !isOut, zone.name)}
+                      className={`${actionTone} disabled:bg-slate-200 disabled:text-slate-500`}
+                      title={authorized ? undefined : 'Accès SSI 3 requis'}
+                    >
+                      {actionLabel}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+            {scenario.zd.length === 0 && (
+              <p className="text-xs text-slate-500">Aucune zone de détection déclarée dans ce scénario.</p>
+            )}
+          </div>
+        </div>
+        <div>
+          <h4 className="text-xs font-semibold uppercase text-slate-500">Dispositifs actionnés de sécurité</h4>
+          <div className="mt-2 space-y-2">
+            {scenario.das.map((das) => {
+              const isOut = dasOut.has(das.id);
+              const actionLabel = isOut ? 'Remettre en service' : 'Mettre hors service';
+              const actionTone = isOut
+                ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                : 'bg-rose-100 text-rose-700 hover:bg-rose-200';
+              return (
+                <div key={das.id} className="rounded border border-slate-200 bg-white p-2">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-700">{das.name}</div>
+                      <div className="text-xs text-slate-500 uppercase">{das.type}</div>
+                    </div>
+                    <Indicator label={isOut ? 'Hors service' : 'En service'} tone={isOut ? 'warning' : 'ok'} active />
+                  </div>
+                  <div className="mt-2 flex justify-end">
+                    <Button
+                      disabled={!authorized}
+                      onClick={() => onToggle('das', das.id, !isOut, das.name)}
+                      className={`${actionTone} disabled:bg-slate-200 disabled:text-slate-500`}
+                      title={authorized ? undefined : 'Accès SSI 3 requis'}
+                    >
+                      {actionLabel}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+            {scenario.das.length === 0 && (
+              <p className="text-xs text-slate-500">Aucun DAS associé à ce scénario.</p>
+            )}
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+};
+
 const Synoptic = ({ scenario }: { scenario?: Scenario }) => {
   const dasStatus = useSessionStore((state) => state.session?.dasStatus ?? {});
+  const outOfService = useSessionStore((state) => state.session?.outOfService ?? { zd: [], das: [] });
   if (!scenario) {
     return (
       <Card title="Synoptique">
@@ -79,6 +286,9 @@ const Synoptic = ({ scenario }: { scenario?: Scenario }) => {
               <li key={zone.id} className="rounded bg-slate-100 px-2 py-1">
                 <span className="font-semibold">{zone.name}</span>
                 <span className="ml-2 text-xs text-slate-500">ZD {zone.id}</span>
+                {outOfService.zd.includes(zone.id) && (
+                  <span className="ml-2 text-xs font-semibold uppercase text-amber-600">HS</span>
+                )}
               </li>
             ))}
           </ul>
@@ -94,6 +304,9 @@ const Synoptic = ({ scenario }: { scenario?: Scenario }) => {
                 </div>
                 <div className="text-xs text-slate-500">
                   État : {dasStatus[das.id] ?? das.status}
+                  {outOfService.das.includes(das.id) && (
+                    <span className="ml-2 font-semibold uppercase text-amber-600">HS</span>
+                  )}
                 </div>
               </li>
             ))}
@@ -223,6 +436,8 @@ const ActionChecklist = ({ session }: { session?: SessionData }) => {
   const resetDone = session?.timeline.some((item) => item.message.includes('Réarmement')) ?? false;
   const ugaActive = session?.ugaActive ?? false;
   const dasIssue = Object.values(session?.dasStatus ?? {}).some((status) => status !== 'en_position');
+  const outOfServiceActive =
+    (session?.outOfService?.zd?.length ?? 0) + (session?.outOfService?.das?.length ?? 0) > 0;
 
   const items: Array<{ id: string; label: string; description: string; tone: 'danger' | 'warning' | 'ok' }> = [
     {
@@ -255,6 +470,14 @@ const ActionChecklist = ({ session }: { session?: SessionData }) => {
       label: 'Contrôler les DAS',
       tone: dasIssue ? 'warning' : 'ok',
       description: dasIssue ? 'Un DAS signale un défaut ou une commande en cours.' : 'Tous les DAS sont conformes.'
+    },
+    {
+      id: 'out-of-service',
+      label: 'Surveiller les mises hors service',
+      tone: outOfServiceActive ? 'warning' : 'ok',
+      description: outOfServiceActive
+        ? 'Des organes sont neutralisés : valider leur remise en service avant la fin du scénario.'
+        : 'Aucune mise hors service active.'
     }
   ];
 
@@ -291,7 +514,13 @@ const LearningObjectives = ({ score }: { score?: number }) => (
   </Card>
 );
 
-const CmsiFacade = () => {
+const CmsiFacade = ({
+  accessLevel,
+  onToggleOutOfService
+}: {
+  accessLevel: AccessLevel;
+  onToggleOutOfService: (targetType: 'zd' | 'das', targetId: string, active: boolean, label: string) => void;
+}) => {
   const connect = useSessionStore((state) => state.connect);
   const connectionStatus = useSessionStore((state) => state.connectionStatus);
   const session = useSessionStore((state) => state.session);
@@ -329,6 +558,13 @@ const CmsiFacade = () => {
     }
   }, [session?.cmsiPhase, session?.t1, session?.t2, sendCmsi]);
 
+  const outOfService = session?.outOfService ?? { zd: [], das: [] };
+  const outOfServiceCount = outOfService.zd.length + outOfService.das.length;
+  const canAck = accessLevel >= 1;
+  const canReset = accessLevel >= 2;
+  const canStopUGA = accessLevel >= 2;
+  const canTest = accessLevel >= 1;
+
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
       <Card title="Statut CMSI">
@@ -337,19 +573,39 @@ const CmsiFacade = () => {
           <Indicator label="UGA active" active={session?.ugaActive ?? false} tone="danger" />
           <Indicator label="Défaut alimentation" active={session?.alimentation !== 'secteur'} tone="warning" />
           <Indicator label="DAS" active={Object.values(session?.dasStatus ?? {}).some((status) => status !== 'en_position')} tone="warning" />
-          <Indicator label="Hors service" active={session?.awaitingReset ?? false} tone="warning" />
+          <Indicator label="Hors service" active={outOfServiceCount > 0} tone="warning" />
         </div>
         <div className="mt-4 grid grid-cols-2 gap-2">
-          <Button onClick={ack} className="bg-emerald-100 text-emerald-700 hover:bg-emerald-200">
+          <Button
+            onClick={ack}
+            className="bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+            disabled={!canAck}
+            title={canAck ? undefined : 'Accès SSI 1 requis'}
+          >
             Acquitter
           </Button>
-          <Button onClick={reset} className="bg-sky-100 text-sky-700 hover:bg-sky-200">
+          <Button
+            onClick={reset}
+            className="bg-sky-100 text-sky-700 hover:bg-sky-200"
+            disabled={!canReset}
+            title={canReset ? undefined : 'Accès SSI 2 requis'}
+          >
             Réarmement
           </Button>
-          <Button onClick={stopUGA} className="bg-amber-100 text-amber-700 hover:bg-amber-200">
+          <Button
+            onClick={stopUGA}
+            className="bg-amber-100 text-amber-700 hover:bg-amber-200"
+            disabled={!canStopUGA}
+            title={canStopUGA ? undefined : 'Accès SSI 2 requis'}
+          >
             Arrêt évacuation
           </Button>
-          <Button className="bg-slate-200 text-slate-700" onClick={() => alert('Test lampes enclenché')}>
+          <Button
+            className="bg-slate-200 text-slate-700"
+            onClick={() => alert('Test lampes enclenché')}
+            disabled={!canTest}
+            title={canTest ? undefined : 'Accès SSI 1 requis'}
+          >
             Test lampes
           </Button>
         </div>
@@ -365,6 +621,12 @@ const CmsiFacade = () => {
       <div className="md:col-span-2 space-y-4">
         <Synoptic scenario={scenario} />
         <PeripheralPanel scenario={scenario} />
+        <OutOfServicePanel
+          scenario={scenario}
+          outOfService={outOfService}
+          accessLevel={accessLevel}
+          onToggle={onToggleOutOfService}
+        />
       </div>
     </div>
   );
@@ -395,10 +657,29 @@ const Dashboard = ({ scenario }: { scenario?: Scenario }) => {
 const App = () => {
   const session = useSessionStore((state) => state.session);
   const scenarios = useSessionStore((state) => state.scenarios);
+  const setOutOfService = useSessionStore((state) => state.setOutOfService);
+  const [accessLevel, setAccessLevel] = useState<AccessLevel>(0);
   const scenario = useMemo(() => {
     if (!session?.scenarioId) return undefined;
     return scenarios.find((item) => item.id === session.scenarioId);
   }, [scenarios, session?.scenarioId]);
+
+  const handleUnlockAccess = (level: Exclude<AccessLevel, 0>) => {
+    setAccessLevel((current) => (level > current ? level : current));
+  };
+
+  const handleLockAccess = () => {
+    setAccessLevel(0);
+  };
+
+  const handleOutOfServiceToggle = (
+    targetType: 'zd' | 'das',
+    targetId: string,
+    active: boolean,
+    label: string
+  ) => {
+    setOutOfService({ targetType, targetId, active, label });
+  };
 
   return (
     <div className="min-h-screen bg-slate-100 p-6">
@@ -407,7 +688,8 @@ const App = () => {
           <h1 className="text-3xl font-bold text-slate-800">Poste Apprenant CMSI</h1>
           <p className="text-slate-500">Version {__APP_VERSION__} – entraînez-vous à l'exploitation d'un SSI de catégorie A.</p>
         </header>
-        <CmsiFacade />
+        <AccessControlPanel accessLevel={accessLevel} onUnlock={handleUnlockAccess} onLock={handleLockAccess} />
+        <CmsiFacade accessLevel={accessLevel} onToggleOutOfService={handleOutOfServiceToggle} />
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <ScenarioBriefing scenario={scenario} />
           <ActionChecklist session={session} />
