@@ -4,6 +4,8 @@ import { useTrainerStore } from './store';
 import type { Scenario } from '@ssi/shared-models';
 import { initialScoreRules } from '@ssi/shared-models';
 
+type ActiveAlarms = { dm: string[]; dai: string[] };
+
 const formatDuration = (seconds?: number) => {
   if (seconds === undefined) return '--';
   return `${seconds.toString().padStart(2, '0')} s`;
@@ -34,6 +36,75 @@ const ConnectionBadge = ({
       : 'En attente';
 
   return <Indicator label={`Serveur ${label}`} tone={tone} active />;
+};
+
+const VisualAlarmLamp = ({
+  label,
+  colorClass,
+  items,
+  emptyLabel
+}: {
+  label: string;
+  colorClass: string;
+  items: string[];
+  emptyLabel: string;
+}) => (
+  <div className="rounded border border-slate-200 bg-white/80 p-2">
+    <div className="flex items-center gap-2">
+      <span
+        className={`h-4 w-4 rounded-full border border-slate-300 transition-all ${
+          items.length > 0 ? colorClass : 'bg-slate-200'
+        }`}
+      />
+      <span className="text-[0.65rem] font-semibold uppercase tracking-widest text-slate-600">{label}</span>
+      {items.length > 0 && (
+        <span className="ml-auto rounded-full bg-slate-100 px-2 py-0.5 text-[0.6rem] font-semibold text-slate-500">
+          {items.length}
+        </span>
+      )}
+    </div>
+    {items.length > 0 ? (
+      <ul className="mt-2 space-y-1 text-[0.65rem] text-slate-600">
+        {items.map((item) => (
+          <li key={item} className="flex items-center gap-2">
+            <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    ) : (
+      <p className="mt-2 text-[0.65rem] text-slate-500">{emptyLabel}</p>
+    )}
+  </div>
+);
+
+const VisualAlarmPanel = ({ scenario, activeAlarms }: { scenario?: Scenario; activeAlarms: ActiveAlarms }) => {
+  const zoneNameById = useMemo(() => {
+    const entries = new Map<string, string>();
+    (scenario?.zd ?? []).forEach((zone) => entries.set(zone.id, zone.name));
+    return entries;
+  }, [scenario]);
+
+  const resolveLabel = (zoneId: string) => zoneNameById.get(zoneId) ?? zoneId.toUpperCase();
+  const dmItems = activeAlarms.dm.map(resolveLabel);
+  const daiItems = activeAlarms.dai.map(resolveLabel);
+
+  return (
+    <div className="mt-2 space-y-2">
+      <VisualAlarmLamp
+        label="DM en alarme"
+        colorClass="bg-red-600 shadow-[0_0_12px_rgba(220,38,38,0.55)] animate-pulse"
+        items={dmItems}
+        emptyLabel="Aucun DM déclenché."
+      />
+      <VisualAlarmLamp
+        label="DAI en alarme"
+        colorClass="bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.55)] animate-pulse"
+        items={daiItems}
+        emptyLabel="Aucun DAI déclenché."
+      />
+    </div>
+  );
 };
 
 const ScenarioSelector = ({
@@ -219,6 +290,7 @@ const SessionOverview = ({ scenario }: { scenario?: Scenario }) => {
 
   const connectionTone: 'danger' | 'warning' | 'ok' =
     connectionStatus === 'connected' ? 'ok' : connectionStatus === 'error' ? 'danger' : 'warning';
+  const activeAlarms = session?.activeAlarms ?? { dm: [], dai: [] };
 
   return (
     <Card title="Session en cours">
@@ -248,6 +320,10 @@ const SessionOverview = ({ scenario }: { scenario?: Scenario }) => {
         <Indicator label={`Connexion ${connectionStatus}`} active tone={connectionTone} />
         <Indicator label="Réarmement requis" active={session?.awaitingReset ?? false} tone="warning" />
         <Indicator label="UGA active" active={session?.ugaActive ?? false} tone="danger" />
+      </div>
+      <div className="mt-4">
+        <h4 className="text-[0.65rem] font-semibold uppercase tracking-widest text-slate-500">Alarmes visuelles</h4>
+        <VisualAlarmPanel scenario={scenario} activeAlarms={activeAlarms} />
       </div>
     </Card>
   );

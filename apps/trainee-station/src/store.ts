@@ -21,6 +21,7 @@ type SessionSnapshot = {
   alarmStartedAt?: number;
   ackTimestamp?: number;
   outOfService: { zd: string[]; das: string[] };
+  activeAlarms: { dm: string[]; dai: string[] };
 };
 
 type SessionStore = {

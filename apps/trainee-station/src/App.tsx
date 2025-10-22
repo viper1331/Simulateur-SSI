@@ -8,6 +8,8 @@ import { initialScoreRules } from '@ssi/shared-models';
 
 type AccessLevel = 0 | 1 | 2 | 3;
 
+type ActiveAlarms = { dm: string[]; dai: string[] };
+
 const ACCESS_CODES: Array<{ level: Exclude<AccessLevel, 0>; code: string; label: string }> = [
   { level: 1, code: '1111', label: 'SSI 1' },
   { level: 2, code: '2222', label: 'SSI 2' },
@@ -47,6 +49,75 @@ const TemporisationBar = ({ label, value, max }: { label: string; value?: number
       <div className="mt-1 h-2 rounded bg-slate-200">
         <div className="h-2 rounded bg-indigo-500 transition-all" style={{ width: `${percentage}%` }} />
       </div>
+    </div>
+  );
+};
+
+const VisualAlarmLamp = ({
+  label,
+  colorClass,
+  items,
+  emptyLabel
+}: {
+  label: string;
+  colorClass: string;
+  items: string[];
+  emptyLabel: string;
+}) => (
+  <div className="rounded border border-slate-200 bg-white p-2">
+    <div className="flex items-center gap-2">
+      <span
+        className={`h-4 w-4 rounded-full border border-slate-300 transition-all ${
+          items.length > 0 ? colorClass : 'bg-slate-200'
+        }`}
+      />
+      <span className="text-xs font-semibold uppercase text-slate-600">{label}</span>
+      {items.length > 0 && (
+        <span className="ml-auto rounded-full bg-slate-100 px-2 py-0.5 text-[0.65rem] font-semibold text-slate-500">
+          {items.length}
+        </span>
+      )}
+    </div>
+    {items.length > 0 ? (
+      <ul className="mt-2 space-y-1 text-xs text-slate-600">
+        {items.map((item) => (
+          <li key={item} className="flex items-center gap-2">
+            <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    ) : (
+      <p className="mt-2 text-xs text-slate-500">{emptyLabel}</p>
+    )}
+  </div>
+);
+
+const VisualAlarmPanel = ({ scenario, activeAlarms }: { scenario?: Scenario; activeAlarms: ActiveAlarms }) => {
+  const zoneNameById = useMemo(() => {
+    const entries = new Map<string, string>();
+    (scenario?.zd ?? []).forEach((zone) => entries.set(zone.id, zone.name));
+    return entries;
+  }, [scenario]);
+
+  const resolveLabel = (zoneId: string) => zoneNameById.get(zoneId) ?? zoneId.toUpperCase();
+  const dmItems = activeAlarms.dm.map(resolveLabel);
+  const daiItems = activeAlarms.dai.map(resolveLabel);
+
+  return (
+    <div className="mt-2 space-y-2">
+      <VisualAlarmLamp
+        label="DM en alarme"
+        colorClass="bg-red-600 shadow-[0_0_12px_rgba(220,38,38,0.55)] animate-pulse"
+        items={dmItems}
+        emptyLabel="Aucun DM déclenché."
+      />
+      <VisualAlarmLamp
+        label="DAI en alarme"
+        colorClass="bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.55)] animate-pulse"
+        items={daiItems}
+        emptyLabel="Aucun DAI déclenché."
+      />
     </div>
   );
 };
@@ -560,6 +631,7 @@ const CmsiFacade = ({
 
   const outOfService = session?.outOfService ?? { zd: [], das: [] };
   const outOfServiceCount = outOfService.zd.length + outOfService.das.length;
+  const activeAlarms = session?.activeAlarms ?? { dm: [], dai: [] };
   const canAck = accessLevel >= 1;
   const canReset = accessLevel >= 2;
   const canStopUGA = accessLevel >= 2;
@@ -574,6 +646,10 @@ const CmsiFacade = ({
           <Indicator label="Défaut alimentation" active={session?.alimentation !== 'secteur'} tone="warning" />
           <Indicator label="DAS" active={Object.values(session?.dasStatus ?? {}).some((status) => status !== 'en_position')} tone="warning" />
           <Indicator label="Hors service" active={outOfServiceCount > 0} tone="warning" />
+        </div>
+        <div className="mt-4">
+          <h4 className="text-xs font-semibold uppercase text-slate-500">Alarmes visuelles</h4>
+          <VisualAlarmPanel scenario={scenario} activeAlarms={activeAlarms} />
         </div>
         <div className="mt-4 grid grid-cols-2 gap-2">
           <Button
