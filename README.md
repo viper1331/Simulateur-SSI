@@ -42,6 +42,7 @@ La documentation détaillée se trouve dans le dossier `docs/` :
 - `docs/manual-formateur.pdf` : pilotage des scénarios et grille de notation.
 - `docs/state-diagrams.md` : machines d'état (Mermaid) couvrant CMSI, DAS et alimentation.
 - `docs/db-schema.md` : description des tables Prisma.
+- `docs/lancement-interfaces.md` : procédures détaillées pour démarrer les interfaces.
 
 ## Tests
 
