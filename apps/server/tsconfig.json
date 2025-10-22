@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "baseUrl": "./",
+    "paths": {
+      "@ssi/shared-models": ["../../packages/shared-models/src"],
+      "@ssi/state-machines": ["../../packages/state-machines/src"],
+      "@ssi/ui-kit": ["../../packages/ui-kit/src"]
+    }
+  },
+  "include": ["src/**/*", "prisma/seed.ts"]
+}

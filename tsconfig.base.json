@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2021",
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "baseUrl": ".",
+    "paths": {
+      "@ssi/shared-models": ["packages/shared-models/src"],
+      "@ssi/state-machines": ["packages/state-machines/src"],
+      "@ssi/ui-kit": ["packages/ui-kit/src"]
+    }
+  }
+}
