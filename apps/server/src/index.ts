@@ -1,10 +1,13 @@
 import cors from 'cors';
 import express from 'express';
 import http from 'http';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, UserRole as PrismaUserRole } from '@prisma/client';
 import { WebSocketServer, WebSocket } from 'ws';
-import { defaultScenarios, ScenarioEvent } from '@ssi/shared-models';
+import { defaultScenarios, ScenarioEvent, userRoleSchema, userSchema } from '@ssi/shared-models';
 import { v4 as uuid } from 'uuid';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import { z } from 'zod';
 
 const parseJson = <T>(value: string | null | undefined): T | undefined => {
   if (!value) return undefined;
@@ -35,6 +38,8 @@ interface SessionState {
   id: string;
   scenarioId?: string;
   runId?: string;
+  trainerId?: string;
+  traineeId?: string;
   t1?: number;
   t2?: number;
   t1Remaining?: number;
@@ -62,33 +67,180 @@ interface Session {
 type ClientRole = 'trainer' | 'trainee';
 
 type ClientMessage =
-  | { type: 'INIT'; sessionId: string; role: ClientRole; userId?: string }
-  | { type: 'START_SCENARIO'; sessionId: string; scenarioId: string; trainerId: string; traineeId: string }
-  | { type: 'TRIGGER_EVENT'; sessionId: string; event: ScenarioEvent }
-  | { type: 'ACK'; sessionId: string; userId: string }
-  | { type: 'RESET'; sessionId: string; userId: string }
-  | { type: 'UGA_STOP'; sessionId: string; userId: string }
+  | { type: 'INIT'; sessionId: string; role: ClientRole; token: string }
+  | { type: 'START_SCENARIO'; sessionId: string; scenarioId: string; traineeId: string; token: string }
+  | { type: 'TRIGGER_EVENT'; sessionId: string; event: ScenarioEvent; token: string }
+  | { type: 'ACK'; sessionId: string; token: string }
+  | { type: 'RESET'; sessionId: string; token: string }
+  | { type: 'UGA_STOP'; sessionId: string; token: string }
   | {
       type: 'SET_OUT_OF_SERVICE';
       sessionId: string;
-      userId: string;
+      token: string;
       targetType: 'zd' | 'das';
       targetId: string;
       active: boolean;
       label?: string;
     }
-  | { type: 'STOP_SCENARIO'; sessionId: string };
+  | { type: 'STOP_SCENARIO'; sessionId: string; token: string };
 
 type ServerMessage =
   | { type: 'SESSION_STATE'; payload: SessionState }
   | { type: 'ERROR'; message: string };
 
 const prisma = new PrismaClient();
+const JWT_SECRET = process.env.JWT_SECRET ?? 'development-secret';
+
+type SanitizedUser = z.infer<typeof userSchema>;
+
+const registrationSchema = z.object({
+  name: z.string().min(1),
+  email: z.string().email(),
+  password: z.string().min(6),
+  role: userRoleSchema
+});
+
+const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1)
+});
+
+const roleByClientRole: Record<ClientRole, PrismaUserRole> = {
+  trainer: 'TRAINER',
+  trainee: 'TRAINEE'
+};
+
+const sendWsError = (ws: WebSocket, message: string) => {
+  ws.send(JSON.stringify({ type: 'ERROR', message } satisfies ServerMessage));
+};
+
+const sanitizeUser = (user: {
+  id: string;
+  name: string;
+  email: string;
+  role: PrismaUserRole;
+  createdAt: Date;
+}): SanitizedUser => ({
+  id: user.id,
+  name: user.name,
+  email: user.email,
+  role: user.role,
+  createdAt: user.createdAt.toISOString()
+});
+
+const createToken = (user: { id: string; role: PrismaUserRole }) =>
+  jwt.sign({ sub: user.id, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
+
+const verifyToken = async (token: string) => {
+  const payload = jwt.verify(token, JWT_SECRET) as { sub: string; role: PrismaUserRole };
+  const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+  if (!user) {
+    throw new Error('Utilisateur introuvable');
+  }
+  return user;
+};
+
+const requireUserForRole = async (token: string, expectedRole?: PrismaUserRole) => {
+  const user = await verifyToken(token);
+  if (expectedRole && user.role !== expectedRole) {
+    throw new Error('Rôle incompatible');
+  }
+  return user;
+};
+
+type AuthenticatedRequest = express.Request & { user?: SanitizedUser; token?: string };
+
+const authenticate: express.RequestHandler = async (req, res, next) => {
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authentification requise' });
+  }
+  const token = header.slice(7);
+  try {
+    const user = await verifyToken(token);
+    (req as AuthenticatedRequest).user = sanitizeUser(user);
+    (req as AuthenticatedRequest).token = token;
+    next();
+  } catch {
+    res.status(401).json({ error: 'Token invalide' });
+  }
+};
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 const sessions = new Map<string, Session>();
+
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const payload = registrationSchema.parse(req.body);
+    const normalizedEmail = payload.email.toLowerCase();
+    const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+    if (existing) {
+      return res.status(409).json({ error: 'Un compte existe déjà avec cet email.' });
+    }
+    const passwordHash = await bcrypt.hash(payload.password, 10);
+    const user = await prisma.user.create({
+      data: {
+        name: payload.name,
+        email: normalizedEmail,
+        passwordHash,
+        role: payload.role
+      }
+    });
+    const token = createToken(user);
+    res.status(201).json({ user: sanitizeUser(user), token });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Requête invalide', details: error.flatten() });
+    }
+    console.error('Registration error', error);
+    res.status(500).json({ error: "Impossible de créer le compte." });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const payload = loginSchema.parse(req.body);
+    const normalizedEmail = payload.email.toLowerCase();
+    const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+    if (!user) {
+      return res.status(401).json({ error: 'Identifiants incorrects.' });
+    }
+    const isValid = await bcrypt.compare(payload.password, user.passwordHash);
+    if (!isValid) {
+      return res.status(401).json({ error: 'Identifiants incorrects.' });
+    }
+    const token = createToken(user);
+    res.json({ user: sanitizeUser(user), token });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Requête invalide', details: error.flatten() });
+    }
+    console.error('Login error', error);
+    res.status(500).json({ error: "Impossible de se connecter." });
+  }
+});
+
+app.get('/api/auth/me', authenticate, (req, res) => {
+  const authReq = req as AuthenticatedRequest;
+  res.json({ user: authReq.user });
+});
+
+app.get('/api/users', authenticate, async (req, res) => {
+  const authReq = req as AuthenticatedRequest;
+  if (!authReq.user) {
+    return res.status(401).json({ error: 'Authentification requise' });
+  }
+  if (authReq.user.role !== 'TRAINER') {
+    return res.status(403).json({ error: 'Accès réservé aux formateurs.' });
+  }
+  const roleQuery = typeof req.query.role === 'string' ? req.query.role.toUpperCase() : undefined;
+  const parsedRole = roleQuery ? userRoleSchema.safeParse(roleQuery) : undefined;
+  const where = parsedRole?.success ? { role: parsedRole.data as PrismaUserRole } : {};
+  const users = await prisma.user.findMany({ where, orderBy: { name: 'asc' } });
+  res.json(users.map(sanitizeUser));
+});
 
 const addTimeline = (session: Session, message: string, category: TimelineEntry['category']): void => {
   session.state.timeline.push({ id: uuid(), timestamp: Date.now(), message, category });
@@ -309,147 +461,210 @@ const handleTriggerEvent = async (session: Session, event: ScenarioEvent) => {
 const handleMessage = async (ws: WebSocket, message: ClientMessage) => {
   switch (message.type) {
     case 'INIT': {
-      const session = ensureSession(message.sessionId);
-      if (message.role === 'trainer') {
-        session.trainers.add(ws);
-      } else {
-        session.trainees.add(ws);
+      try {
+        const user = await requireUserForRole(message.token, roleByClientRole[message.role]);
+        const session = ensureSession(message.sessionId);
+        if (message.role === 'trainer') {
+          session.trainers.add(ws);
+          session.state.trainerId = user.id;
+        } else {
+          session.trainees.add(ws);
+          session.state.traineeId = user.id;
+        }
+        broadcast(session);
+      } catch (error) {
+        console.error('INIT error', error);
+        sendWsError(ws, "Authentification websocket refusée.");
+        ws.close();
       }
-      broadcast(session);
       break;
     }
     case 'START_SCENARIO': {
-      const session = ensureSession(message.sessionId);
-      resetTick(session);
-      const scenario = defaultScenarios.find((s) => s.id === message.scenarioId);
-      if (!scenario) {
-        return ws.send(JSON.stringify({ type: 'ERROR', message: 'Scenario inconnu' } satisfies ServerMessage));
-      }
-      session.state = {
-        ...session.state,
-        scenarioId: scenario.id,
-        t1: scenario.t1,
-        t2: scenario.t2,
-        t1Remaining: scenario.t1,
-        t2Remaining: scenario.t2,
-        cmsiPhase: 'idle',
-        ugaActive: false,
-        alimentation: 'secteur',
-        dasStatus: Object.fromEntries(scenario.das.map((das) => [das.id, das.status])),
-        timeline: [],
-        score: 0,
-        awaitingReset: false,
-        alarmStartedAt: undefined,
-        ackTimestamp: undefined,
-        id: session.state.id,
-        outOfService: { zd: [], das: [] },
-        activeAlarms: { dm: [], dai: [] }
-      };
-      addTimeline(session, `Scénario "${scenario.name}" démarré`, 'system');
-      const run = await prisma.run.create({
-        data: {
-          scenarioId: scenario.id,
-          traineeId: message.traineeId,
-          trainerId: message.trainerId,
-          status: 'running'
+      try {
+        const trainer = await requireUserForRole(message.token, 'TRAINER');
+        const trainee = await prisma.user.findUnique({ where: { id: message.traineeId } });
+        if (!trainee || trainee.role !== 'TRAINEE') {
+          return sendWsError(ws, 'Apprenant introuvable.');
         }
-      });
-      session.state.runId = run.id;
-      await persistAction(session, 'START_SCENARIO', { scenarioId: scenario.id });
-      broadcast(session);
+        const session = ensureSession(message.sessionId);
+        resetTick(session);
+        const scenario = defaultScenarios.find((s) => s.id === message.scenarioId);
+        if (!scenario) {
+          return sendWsError(ws, 'Scénario inconnu.');
+        }
+        session.state = {
+          ...session.state,
+          scenarioId: scenario.id,
+          trainerId: trainer.id,
+          traineeId: trainee.id,
+          t1: scenario.t1,
+          t2: scenario.t2,
+          t1Remaining: scenario.t1,
+          t2Remaining: scenario.t2,
+          cmsiPhase: 'idle',
+          ugaActive: false,
+          alimentation: 'secteur',
+          dasStatus: Object.fromEntries(scenario.das.map((das) => [das.id, das.status])),
+          timeline: [],
+          score: 0,
+          awaitingReset: false,
+          alarmStartedAt: undefined,
+          ackTimestamp: undefined,
+          id: session.state.id,
+          outOfService: { zd: [], das: [] },
+          activeAlarms: { dm: [], dai: [] }
+        };
+        addTimeline(session, `Scénario "${scenario.name}" démarré`, 'system');
+        const run = await prisma.run.create({
+          data: {
+            scenarioId: scenario.id,
+            traineeId: trainee.id,
+            trainerId: trainer.id,
+            status: 'running'
+          }
+        });
+        session.state.runId = run.id;
+        await persistAction(session, 'START_SCENARIO', {
+          scenarioId: scenario.id,
+          trainerId: trainer.id,
+          traineeId: trainee.id
+        });
+        broadcast(session);
+      } catch (error) {
+        console.error('START_SCENARIO error', error);
+        sendWsError(ws, error instanceof Error ? error.message : 'Erreur lors du démarrage du scénario.');
+      }
       break;
     }
     case 'TRIGGER_EVENT': {
-      const session = ensureSession(message.sessionId);
-      await handleTriggerEvent(session, message.event);
-      broadcast(session);
+      try {
+        await requireUserForRole(message.token, 'TRAINER');
+        const session = ensureSession(message.sessionId);
+        await handleTriggerEvent(session, message.event);
+        broadcast(session);
+      } catch (error) {
+        console.error('TRIGGER_EVENT error', error);
+        sendWsError(ws, 'Action non autorisée.');
+      }
       break;
     }
     case 'ACK': {
-      const session = ensureSession(message.sessionId);
-      session.state.cmsiPhase = 'retourNormal';
-      session.state.ackTimestamp = Date.now();
-      session.state.ugaActive = false;
-      addTimeline(session, 'Acquittement réalisé', 'action');
-      await persistAction(session, 'ACK', { userId: message.userId });
-      await evaluateAck(session);
-      broadcast(session);
+      try {
+        const user = await requireUserForRole(message.token);
+        const session = ensureSession(message.sessionId);
+        session.state.cmsiPhase = 'retourNormal';
+        session.state.ackTimestamp = Date.now();
+        session.state.ugaActive = false;
+        addTimeline(session, `Acquittement réalisé par ${user.name}`, 'action');
+        await persistAction(session, 'ACK', { userId: user.id });
+        await evaluateAck(session);
+        broadcast(session);
+      } catch (error) {
+        console.error('ACK error', error);
+        sendWsError(ws, "Impossible d'acquitter.");
+      }
       break;
     }
     case 'RESET': {
-      const session = ensureSession(message.sessionId);
-      session.state.awaitingReset = false;
-      session.state.cmsiPhase = 'idle';
-      session.state.alimentation = 'secteur';
-      session.state.dasStatus = Object.fromEntries(Object.keys(session.state.dasStatus).map((id) => [id, 'en_position']));
-      session.state.t1Remaining = session.state.t1;
-      session.state.t2Remaining = session.state.t2;
-      session.state.activeAlarms = { dm: [], dai: [] };
-      addTimeline(session, 'Réarmement effectué', 'action');
-      await persistAction(session, 'RESET', { userId: message.userId });
-      await evaluateSequence(session);
-      broadcast(session);
+      try {
+        const user = await requireUserForRole(message.token);
+        const session = ensureSession(message.sessionId);
+        session.state.awaitingReset = false;
+        session.state.cmsiPhase = 'idle';
+        session.state.alimentation = 'secteur';
+        session.state.dasStatus = Object.fromEntries(
+          Object.keys(session.state.dasStatus).map((id) => [id, 'en_position'])
+        );
+        session.state.t1Remaining = session.state.t1;
+        session.state.t2Remaining = session.state.t2;
+        session.state.activeAlarms = { dm: [], dai: [] };
+        addTimeline(session, `Réarmement effectué par ${user.name}`, 'action');
+        await persistAction(session, 'RESET', { userId: user.id });
+        await evaluateSequence(session);
+        broadcast(session);
+      } catch (error) {
+        console.error('RESET error', error);
+        sendWsError(ws, 'Réarmement impossible.');
+      }
       break;
     }
     case 'UGA_STOP': {
-      const session = ensureSession(message.sessionId);
-      session.state.ugaActive = false;
-      addTimeline(session, 'Arrêt UGA manuel', 'action');
-      await persistAction(session, 'UGA_STOP', { userId: message.userId });
-      await updateScore(session, 'Arrêt UGA prématuré', -25);
-      broadcast(session);
+      try {
+        const user = await requireUserForRole(message.token);
+        const session = ensureSession(message.sessionId);
+        session.state.ugaActive = false;
+        addTimeline(session, `Arrêt UGA manuel par ${user.name}`, 'action');
+        await persistAction(session, 'UGA_STOP', { userId: user.id });
+        await updateScore(session, 'Arrêt UGA prématuré', -25);
+        broadcast(session);
+      } catch (error) {
+        console.error('UGA_STOP error', error);
+        sendWsError(ws, "Arrêt UGA non autorisé.");
+      }
       break;
     }
     case 'SET_OUT_OF_SERVICE': {
-      const session = ensureSession(message.sessionId);
-      const { targetType, targetId, active, label } = message;
-      const current = session.state.outOfService[targetType] ?? [];
-      const updated = active
-        ? Array.from(new Set([...current, targetId]))
-        : current.filter((id) => id !== targetId);
-      session.state.outOfService = {
-        ...session.state.outOfService,
-        [targetType]: updated
-      };
-      const name = label ?? targetId;
-      const actionLabel = targetType === 'zd' ? 'Zone' : 'DAS';
-      addTimeline(
-        session,
-        `${actionLabel} ${active ? 'mise hors service' : 'remise en service'} (${name})`,
-        'action'
-      );
-      await persistAction(session, 'SET_OUT_OF_SERVICE', {
-        targetType,
-        targetId,
-        active,
-        label,
-        userId: message.userId
-      });
-      broadcast(session);
+      try {
+        const user = await requireUserForRole(message.token);
+        const session = ensureSession(message.sessionId);
+        const { targetType, targetId, active, label } = message;
+        const current = session.state.outOfService[targetType] ?? [];
+        const updated = active
+          ? Array.from(new Set([...current, targetId]))
+          : current.filter((id) => id !== targetId);
+        session.state.outOfService = {
+          ...session.state.outOfService,
+          [targetType]: updated
+        };
+        const name = label ?? targetId;
+        const actionLabel = targetType === 'zd' ? 'Zone' : 'DAS';
+        addTimeline(
+          session,
+          `${actionLabel} ${active ? 'mise hors service' : 'remise en service'} (${name}) par ${user.name}`,
+          'action'
+        );
+        await persistAction(session, 'SET_OUT_OF_SERVICE', {
+          targetType,
+          targetId,
+          active,
+          label,
+          userId: user.id
+        });
+        broadcast(session);
+      } catch (error) {
+        console.error('SET_OUT_OF_SERVICE error', error);
+        sendWsError(ws, 'Action hors service refusée.');
+      }
       break;
     }
     case 'STOP_SCENARIO': {
-      const session = ensureSession(message.sessionId);
-      resetTick(session);
-      if (session.state.awaitingReset) {
-        await updateScore(session, 'Absence de réarmement', -10);
+      try {
+        const trainer = await requireUserForRole(message.token, 'TRAINER');
+        const session = ensureSession(message.sessionId);
+        resetTick(session);
+        if (session.state.awaitingReset) {
+          await updateScore(session, 'Absence de réarmement', -10);
+        }
+        session.state.awaitingReset = false;
+        session.state.cmsiPhase = 'idle';
+        session.state.ugaActive = false;
+        session.state.activeAlarms = { dm: [], dai: [] };
+        addTimeline(session, `Scénario arrêté par ${trainer.name}`, 'system');
+        if (session.state.runId) {
+          await prisma.run.update({
+            where: { id: session.state.runId },
+            data: {
+              endedAt: new Date(),
+              status: 'completed',
+              score: session.state.score
+            }
+          });
+        }
+        broadcast(session);
+      } catch (error) {
+        console.error('STOP_SCENARIO error', error);
+        sendWsError(ws, 'Arrêt de scénario refusé.');
       }
-      session.state.awaitingReset = false;
-      session.state.cmsiPhase = 'idle';
-      session.state.ugaActive = false;
-      session.state.activeAlarms = { dm: [], dai: [] };
-      addTimeline(session, 'Scénario arrêté', 'system');
-      if (session.state.runId) {
-        await prisma.run.update({
-          where: { id: session.state.runId },
-          data: {
-            endedAt: new Date(),
-            status: 'completed',
-            score: session.state.score
-          }
-        });
-      }
-      broadcast(session);
       break;
     }
     default:
