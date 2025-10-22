@@ -18,6 +18,8 @@ type SessionSnapshot = {
   timeline: { id: string; timestamp: number; message: string; category: string }[];
   score: number;
   awaitingReset: boolean;
+  alarmStartedAt?: number;
+  ackTimestamp?: number;
 };
 
 type SessionStore = {
