@@ -1,9 +1,15 @@
 import cors from 'cors';
 import express from 'express';
 import http from 'http';
-import { PrismaClient, UserRole as PrismaUserRole } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import { WebSocketServer, WebSocket } from 'ws';
-import { defaultScenarios, ScenarioEvent, userRoleSchema, userSchema } from '@ssi/shared-models';
+import {
+  defaultScenarios,
+  ScenarioEvent,
+  userRoleSchema,
+  userSchema,
+  type UserRole
+} from '@ssi/shared-models';
 import { v4 as uuid } from 'uuid';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -107,7 +113,7 @@ const loginSchema = z.object({
   password: z.string().min(1)
 });
 
-const roleByClientRole: Record<ClientRole, PrismaUserRole> = {
+const roleByClientRole: Record<ClientRole, UserRole> = {
   trainer: 'TRAINER',
   trainee: 'TRAINEE'
 };
@@ -116,33 +122,43 @@ const sendWsError = (ws: WebSocket, message: string) => {
   ws.send(JSON.stringify({ type: 'ERROR', message } satisfies ServerMessage));
 };
 
+const normalizeUser = <T extends { role: string }>(
+  user: T
+): Omit<T, 'role'> & { role: UserRole } => ({
+  ...user,
+  role: userRoleSchema.parse(user.role)
+});
+
 const sanitizeUser = (user: {
   id: string;
   name: string;
   email: string;
-  role: PrismaUserRole;
+  role: string;
   createdAt: Date;
-}): SanitizedUser => ({
-  id: user.id,
-  name: user.name,
-  email: user.email,
-  role: user.role,
-  createdAt: user.createdAt.toISOString()
-});
+}): SanitizedUser => {
+  const normalized = normalizeUser(user);
+  return {
+    id: normalized.id,
+    name: normalized.name,
+    email: normalized.email,
+    role: normalized.role,
+    createdAt: normalized.createdAt.toISOString()
+  };
+};
 
-const createToken = (user: { id: string; role: PrismaUserRole }) =>
+const createToken = (user: { id: string; role: UserRole }) =>
   jwt.sign({ sub: user.id, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
 
 const verifyToken = async (token: string) => {
-  const payload = jwt.verify(token, JWT_SECRET) as { sub: string; role: PrismaUserRole };
+  const payload = jwt.verify(token, JWT_SECRET) as { sub: string; role: string };
   const user = await prisma.user.findUnique({ where: { id: payload.sub } });
   if (!user) {
     throw new Error('Utilisateur introuvable');
   }
-  return user;
+  return normalizeUser(user);
 };
 
-const requireUserForRole = async (token: string, expectedRole?: PrismaUserRole) => {
+const requireUserForRole = async (token: string, expectedRole?: UserRole) => {
   const user = await verifyToken(token);
   if (expectedRole && user.role !== expectedRole) {
     throw new Error('Rôle incompatible');
@@ -182,7 +198,7 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(409).json({ error: 'Un compte existe déjà avec cet email.' });
     }
     const passwordHash = await bcrypt.hash(payload.password, 10);
-    const user = await prisma.user.create({
+    const createdUser = await prisma.user.create({
       data: {
         name: payload.name,
         email: normalizedEmail,
@@ -190,6 +206,7 @@ app.post('/api/auth/register', async (req, res) => {
         role: payload.role
       }
     });
+    const user = normalizeUser(createdUser);
     const token = createToken(user);
     res.status(201).json({ user: sanitizeUser(user), token });
   } catch (error) {
@@ -213,8 +230,9 @@ app.post('/api/auth/login', async (req, res) => {
     if (!isValid) {
       return res.status(401).json({ error: 'Identifiants incorrects.' });
     }
-    const token = createToken(user);
-    res.json({ user: sanitizeUser(user), token });
+    const normalizedUser = normalizeUser(user);
+    const token = createToken(normalizedUser);
+    res.json({ user: sanitizeUser(normalizedUser), token });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: 'Requête invalide', details: error.flatten() });
@@ -239,7 +257,7 @@ app.get('/api/users', authenticate, async (req, res) => {
   }
   const roleQuery = typeof req.query.role === 'string' ? req.query.role.toUpperCase() : undefined;
   const parsedRole = roleQuery ? userRoleSchema.safeParse(roleQuery) : undefined;
-  const where = parsedRole?.success ? { role: parsedRole.data as PrismaUserRole } : {};
+  const where = parsedRole?.success ? { role: parsedRole.data } : {};
   const users = await prisma.user.findMany({ where, orderBy: { name: 'asc' } });
   res.json(users.map(sanitizeUser));
 });
