@@ -130,34 +130,86 @@ const Timeline = () => {
   );
 };
 
-const AccessLevelStatus = ({ accessLevel }: { accessLevel: AccessLevel }) => {
-  const tone = accessLevel === 0 ? 'warning' : 'ok';
+const AccessLevelStatus = ({
+  grantedLevel,
+  activeLevel,
+  onActivate,
+  onRelease
+}: {
+  grantedLevel: AccessLevel;
+  activeLevel: AccessLevel;
+  onActivate: (level: Exclude<AccessLevel, 0>) => void;
+  onRelease: () => void;
+}) => {
   const managedLevels = [1, 2, 3] as const;
+  const grantedTone = grantedLevel === 0 ? 'warning' : 'ok';
+  const activeTone = activeLevel === 0 ? 'warning' : 'ok';
+  const helperMessage =
+    grantedLevel === 0
+      ? "En attente d'une autorisation du formateur pour libérer un niveau."
+      : `Le formateur a autorisé l'accès ${ACCESS_LEVELS[grantedLevel].label}. Libérez un niveau pour vos actions.`;
 
   return (
     <Card title="Accès SSI">
       <div className="space-y-3 text-sm text-slate-600">
-        <div className="flex items-center justify-between">
-          <span>Niveau actuel</span>
-          <Indicator label={ACCESS_LEVELS[accessLevel].label} tone={tone} active />
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="flex items-center justify-between rounded bg-slate-50 px-3 py-2">
+            <span>Niveau autorisé (formateur)</span>
+            <Indicator label={ACCESS_LEVELS[grantedLevel].label} tone={grantedTone} active />
+          </div>
+          <div className="flex items-center justify-between rounded bg-slate-50 px-3 py-2">
+            <span>Niveau utilisé (apprenant)</span>
+            <Indicator label={ACCESS_LEVELS[activeLevel].label} tone={activeTone} active />
+          </div>
         </div>
-        <p className="text-xs text-slate-500">
-          {accessLevel === 0
-            ? "En attente d'une activation par le formateur."
-            : `Le niveau ${ACCESS_LEVELS[accessLevel].label} a été autorisé par le formateur.`}
-        </p>
+        <p className="text-xs text-slate-500">{helperMessage}</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {managedLevels.map((level) => {
+            const isActive = level === activeLevel;
+            const isGranted = level <= grantedLevel;
+            return (
+              <Button
+                key={level}
+                onClick={() => onActivate(level)}
+                disabled={!isGranted || isActive}
+                className="bg-indigo-100 text-indigo-700 hover:bg-indigo-200 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Activer {ACCESS_LEVELS[level].label}
+              </Button>
+            );
+          })}
+          <Button
+            onClick={onRelease}
+            disabled={activeLevel === 0}
+            className="sm:col-span-2 bg-slate-200 text-slate-700 hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Libérer l'accès
+          </Button>
+        </div>
         <div>
           <h4 className="text-xs font-semibold uppercase text-slate-500">Droits par niveau</h4>
           <ul className="mt-2 space-y-1 text-xs text-slate-500">
             {managedLevels.map((level) => {
               const rights = ACCESS_LEVELS[level].rights;
-              const isActive = level === accessLevel;
+              const isActive = level === activeLevel;
+              const isGranted = level <= grantedLevel;
               return (
-                <li key={level} className={isActive ? 'text-xs font-semibold text-slate-600' : undefined}>
+                <li
+                  key={`rights-${level}`}
+                  className={
+                    isActive
+                      ? 'text-xs font-semibold text-slate-600'
+                      : isGranted
+                      ? 'text-slate-600'
+                      : 'text-slate-400'
+                  }
+                >
                   <span className="text-slate-600">{ACCESS_LEVELS[level].label}</span>
                   {': '}
                   {rights.length > 0 ? rights.join(', ') : 'Aucun droit spécifique.'}
-                  {isActive && <span className="ml-2 text-indigo-600">(actif)</span>}
+                  {isActive && <span className="ml-2 text-indigo-600">(utilisé)</span>}
+                  {!isActive && isGranted && <span className="ml-2 text-slate-500">(autorisé)</span>}
+                  {!isGranted && <span className="ml-2 text-slate-400">(non autorisé)</span>}
                 </li>
               );
             })}
@@ -623,7 +675,7 @@ const App = () => {
   const logout = useSessionStore((state) => state.logout);
   const clearError = useSessionStore((state) => state.clearError);
   const sessionId = useSessionStore((state) => state.sessionId);
-  const [accessLevel, setAccessLevel] = useState<AccessLevel>(0);
+  const [activeAccessLevel, setActiveAccessLevel] = useState<AccessLevel>(0);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [formState, setFormState] = useState({ name: '', email: '', password: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -639,7 +691,21 @@ const App = () => {
     return scenarios.find((item) => item.id === session.scenarioId);
   }, [scenarios, session?.scenarioId]);
 
-  const accessLevel = session?.accessLevel ?? 0;
+  const grantedAccessLevel: AccessLevel = session?.accessLevel ?? 0;
+
+  useEffect(() => {
+    setActiveAccessLevel((current) => (current > grantedAccessLevel ? grantedAccessLevel : current));
+  }, [grantedAccessLevel]);
+
+  const handleActivateAccessLevel = (level: Exclude<AccessLevel, 0>) => {
+    if (level <= grantedAccessLevel) {
+      setActiveAccessLevel(level);
+    }
+  };
+
+  const handleReleaseAccessLevel = () => {
+    setActiveAccessLevel(0);
+  };
 
   const handleOutOfServiceToggle = (
     targetType: 'zd' | 'das',
@@ -802,8 +868,13 @@ const App = () => {
             </Button>
           </div>
         </header>
-        <AccessLevelStatus accessLevel={accessLevel} />
-        <CmsiFacade accessLevel={accessLevel} onToggleOutOfService={handleOutOfServiceToggle} />
+        <AccessLevelStatus
+          grantedLevel={grantedAccessLevel}
+          activeLevel={activeAccessLevel}
+          onActivate={handleActivateAccessLevel}
+          onRelease={handleReleaseAccessLevel}
+        />
+        <CmsiFacade accessLevel={activeAccessLevel} onToggleOutOfService={handleOutOfServiceToggle} />
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <ScenarioBriefing scenario={scenario} />
           <ActionChecklist session={session} />
