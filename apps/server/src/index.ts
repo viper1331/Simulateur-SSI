@@ -6,10 +6,11 @@ import { WebSocketServer, WebSocket } from 'ws';
 import {
   defaultScenarios,
   ScenarioEvent,
+  scenarioSchema,
   userRoleSchema,
   userSchema,
-  getAccessLevelLabel,
   type AccessLevel,
+  type Scenario,
   type UserRole
 } from '@ssi/shared-models';
 import { v4 as uuid } from 'uuid';
@@ -46,6 +47,7 @@ type ScenarioConfig = {
 interface SessionState {
   id: string;
   scenarioId?: string;
+  scenarioDefinition?: Scenario;
   runId?: string;
   trainerId?: string;
   traineeId?: string;
@@ -78,7 +80,14 @@ type ClientRole = 'trainer' | 'trainee';
 
 type ClientMessage =
   | { type: 'INIT'; sessionId: string; role: ClientRole; token: string }
-  | { type: 'START_SCENARIO'; sessionId: string; scenarioId: string; traineeId: string; token: string }
+  | {
+      type: 'START_SCENARIO';
+      sessionId: string;
+      scenarioId: string;
+      traineeId: string;
+      token: string;
+      scenario?: Scenario;
+    }
   | { type: 'TRIGGER_EVENT'; sessionId: string; event: ScenarioEvent; token: string }
   | { type: 'ACK'; sessionId: string; token: string }
   | { type: 'RESET'; sessionId: string; token: string }
@@ -378,6 +387,7 @@ const ensureSession = (sessionId: string): Session => {
       trainees: new Set(),
       state: {
         id: sessionId,
+        scenarioDefinition: undefined,
         cmsiPhase: 'idle',
         ugaActive: false,
         alimentation: 'secteur',
@@ -512,13 +522,28 @@ const handleMessage = async (ws: WebSocket, message: ClientMessage) => {
         }
         const session = ensureSession(message.sessionId);
         resetTick(session);
-        const scenario = defaultScenarios.find((s) => s.id === message.scenarioId);
-        if (!scenario) {
-          return sendWsError(ws, 'Scénario inconnu.');
+        let scenario: Scenario | undefined;
+        if (message.scenario) {
+          const parsed = scenarioSchema.safeParse(message.scenario);
+          if (!parsed.success) {
+            return sendWsError(ws, 'Scénario fourni invalide.');
+          }
+          scenario = parsed.data;
+        } else {
+          const fallback = defaultScenarios.find((s) => s.id === message.scenarioId);
+          if (!fallback) {
+            return sendWsError(ws, 'Scénario inconnu.');
+          }
+          scenario = scenarioSchema.parse(fallback);
         }
+        if (!scenario) {
+          return sendWsError(ws, 'Scénario introuvable.');
+        }
+        const scenarioId = scenario.id;
         session.state = {
           ...session.state,
-          scenarioId: scenario.id,
+          scenarioId,
+          scenarioDefinition: scenario,
           trainerId: trainer.id,
           traineeId: trainee.id,
           t1: scenario.t1,
@@ -541,7 +566,7 @@ const handleMessage = async (ws: WebSocket, message: ClientMessage) => {
         addTimeline(session, `Scénario "${scenario.name}" démarré`, 'system');
         const run = await prisma.run.create({
           data: {
-            scenarioId: scenario.id,
+            scenarioId,
             traineeId: trainee.id,
             trainerId: trainer.id,
             status: 'running'
@@ -692,6 +717,7 @@ const handleMessage = async (ws: WebSocket, message: ClientMessage) => {
         session.state.cmsiPhase = 'idle';
         session.state.ugaActive = false;
         session.state.activeAlarms = { dm: [], dai: [] };
+        session.state.scenarioDefinition = undefined;
         addTimeline(session, `Scénario arrêté par ${trainer.name}`, 'system');
         if (session.state.runId) {
           await prisma.run.update({
