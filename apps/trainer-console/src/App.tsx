@@ -1,8 +1,8 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Indicator } from '@ssi/ui-kit';
 import { useTrainerStore } from './store';
-import type { Scenario, User } from '@ssi/shared-models';
-import { initialScoreRules } from '@ssi/shared-models';
+import type { AccessLevel, Scenario, ScenarioEvent, User } from '@ssi/shared-models';
+import { ACCESS_CODES, ACCESS_LEVELS, initialScoreRules } from '@ssi/shared-models';
 import DebugConsole from './DebugConsole';
 import logger from './logger';
 
@@ -1353,6 +1353,7 @@ const App = () => {
   const fetchScenarios = useTrainerStore((state) => state.fetchScenarios);
   const createTrainee = useTrainerStore((state) => state.createTrainee);
   const startScenario = useTrainerStore((state) => state.startScenario);
+  const updateScenario = useTrainerStore((state) => state.updateScenario);
 
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' });

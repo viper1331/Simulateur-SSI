@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Scenario, ScenarioEvent, User } from '@ssi/shared-models';
+import type { AccessLevel, Scenario, ScenarioEvent, User } from '@ssi/shared-models';
 import logger from './logger';
 
 const sessionIdForTrainee = (traineeId: string) => `session-${traineeId}`;
@@ -57,6 +57,8 @@ type TrainerStore = {
   triggerEvent: (event: ScenarioEvent) => void;
   stopScenario: () => void;
   createTrainee: (payload: { name: string; email: string; password: string }) => Promise<boolean>;
+  setAccessLevel: (level: AccessLevel) => void;
+  updateScenario: (scenario: Scenario) => void;
 };
 
 declare global {
@@ -302,5 +304,50 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
       set({ authError: 'Création du compte apprenant impossible.' });
       return false;
     }
+  },
+  setAccessLevel(level) {
+    const { sessionId, auth } = get();
+    if (!sessionId || !auth) {
+      logger.warn('Impossible de modifier le niveau d’accès SSI', {
+        hasSession: Boolean(sessionId),
+        isAuthenticated: Boolean(auth)
+      });
+      return;
+    }
+
+    const nextLevel = Math.max(0, Math.min(level, 3)) as AccessLevel;
+    logger.info('Changement du niveau d’accès SSI demandé', {
+      sessionId,
+      level: nextLevel
+    });
+
+    set((state) =>
+      state.session
+        ? {
+            session: {
+              ...state.session,
+              accessLevel: nextLevel
+            }
+          }
+        : {}
+    );
+
+    socket?.send(
+      JSON.stringify({
+        type: 'SET_ACCESS_LEVEL',
+        sessionId,
+        level: nextLevel,
+        trainerId: auth.user.id,
+        token: auth.token
+      })
+    );
+  },
+  updateScenario(updatedScenario) {
+    logger.debug('Mise à jour locale du scénario', { scenarioId: updatedScenario.id });
+    set((state) => ({
+      scenarios: state.scenarios.map((scenario) =>
+        scenario.id === updatedScenario.id ? updatedScenario : scenario
+      )
+    }));
   }
 }));
