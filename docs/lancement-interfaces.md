@@ -28,9 +28,9 @@ La commande suivante lance simultanément le serveur backend ainsi que les deux 
 npm run dev
 ```
 
-- **Serveur API + WebSocket** : http://localhost:4000
-- **Poste Apprenant** : http://localhost:5173
-- **Console Formateur** : http://localhost:5174
+- **Serveur API + WebSocket** : http://localhost:4500
+- **Poste Apprenant** : http://localhost:5300
+- **Console Formateur** : http://localhost:5301
 
 Chaque application Vite se reconnecte automatiquement au serveur WebSocket lorsque ce dernier redémarre.
 
@@ -55,8 +55,8 @@ Cette approche est utile pour n'observer que les logs d'une application ou attac
 
 Les interfaces consomment deux variables d'environnement Vite lors du build ou du dev server :
 
-- `VITE_SERVER_API` : URL HTTP utilisée pour les appels REST (par défaut `http://localhost:4000`).
-- `VITE_SERVER_WS` : URL WebSocket utilisée pour le temps réel (par défaut `ws://localhost:4000`).
+- `VITE_SERVER_API` : URL HTTP utilisée pour les appels REST (par défaut `http://localhost:4500`).
+- `VITE_SERVER_WS` : URL WebSocket utilisée pour le temps réel (par défaut `ws://localhost:4500`).
 
 Créez un fichier `.env.local` à la racine de chaque interface pour personnaliser ces valeurs si le serveur tourne sur une autre machine ou un autre port :
 
@@ -72,8 +72,8 @@ Les mêmes clés peuvent être définies pour la console formateur.
 
 | Symptôme | Piste de résolution |
 | --- | --- |
-| Les interfaces affichent « Connexion perdue » | Vérifier que `npm run dev -w apps/server` écoute bien sur le port 4000 et que le pare-feu autorise l'accès. |
+| Les interfaces affichent « Connexion perdue » | Vérifier que `npm run dev -w apps/server` écoute bien sur le port 4500 et que le pare-feu autorise l'accès. |
 | Erreur « Failed to fetch » dans la console navigateur | S'assurer que `VITE_SERVER_API` pointe vers le bon hôte et que CORS est autorisé (activé par défaut dans Express). |
-| Ports 5173/5174 déjà utilisés | Relancer Vite avec `--port` et mettre à jour les variables `VITE_SERVER_*` pour refléter les nouvelles URLs. |
+| Ports 5300/5301 déjà utilisés | Relancer Vite avec `--port` et mettre à jour les variables `VITE_SERVER_*` pour refléter les nouvelles URLs. |
 
 Avec ces étapes, les deux interfaces restent synchronisées avec le serveur SSI pour les sessions de formation.

@@ -30,9 +30,9 @@ npm run dev
 
 Cette commande lance simultanément :
 
-- le serveur Express + WebSocket (port 4000),
-- l'interface Apprenant (port 5173),
-- l'interface Formateur (port 5174).
+- le serveur Express + WebSocket (port 4500),
+- l'interface Apprenant (port 5300),
+- l'interface Formateur (port 5301).
 
 ## Documentation
 

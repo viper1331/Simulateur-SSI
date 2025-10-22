@@ -416,7 +416,7 @@ wss.on('connection', (ws) => {
   });
 });
 
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 4500;
 server.listen(PORT, () => {
   console.log(`🚒 Serveur SSI en écoute sur le port ${PORT}`);
 });
