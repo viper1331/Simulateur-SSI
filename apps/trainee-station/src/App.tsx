@@ -4,7 +4,7 @@ import { Button, Card, Indicator } from '@ssi/ui-kit';
 import { cmsiMachine } from '@ssi/state-machines';
 import { useMachine } from '@xstate/react';
 import type { AccessLevel, Scenario } from '@ssi/shared-models';
-import { ACCESS_LEVELS, initialScoreRules } from '@ssi/shared-models';
+import { ACCESS_CODES, ACCESS_LEVELS, initialScoreRules } from '@ssi/shared-models';
 
 type ActiveAlarms = { dm: string[]; dai: string[] };
 
@@ -144,10 +144,57 @@ const AccessLevelStatus = ({
   const managedLevels = [1, 2, 3] as const;
   const grantedTone = grantedLevel === 0 ? 'warning' : 'ok';
   const activeTone = activeLevel === 0 ? 'warning' : 'ok';
+  const [pendingLevel, setPendingLevel] = useState<Exclude<AccessLevel, 0> | null>(null);
+  const [codeInput, setCodeInput] = useState('');
+  const [codeError, setCodeError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (pendingLevel && pendingLevel > grantedLevel) {
+      setPendingLevel(null);
+      setCodeInput('');
+      setCodeError(null);
+    }
+  }, [grantedLevel, pendingLevel]);
+
   const helperMessage =
     grantedLevel === 0
       ? "En attente d'une autorisation du formateur pour libérer un niveau."
-      : `Le formateur a autorisé l'accès ${ACCESS_LEVELS[grantedLevel].label}. Libérez un niveau pour vos actions.`;
+      : `Le formateur a autorisé l'accès ${ACCESS_LEVELS[grantedLevel].label}. Saisissez le code associé pour libérer le niveau souhaité.`;
+
+  const handleRequestActivation = (level: Exclude<AccessLevel, 0>) => {
+    if (level > grantedLevel) return;
+    setPendingLevel(level);
+    setCodeInput('');
+    setCodeError(null);
+  };
+
+  const handleCodeSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!pendingLevel) return;
+    const expectedCode = ACCESS_CODES.find((item) => item.level === pendingLevel)?.code;
+    if (expectedCode && expectedCode === codeInput.trim()) {
+      onActivate(pendingLevel);
+      setPendingLevel(null);
+      setCodeInput('');
+      setCodeError(null);
+      return;
+    }
+    setCodeError('Code incorrect, veuillez réessayer.');
+  };
+
+  const handleCodeChange = (event: ChangeEvent<HTMLInputElement>) => {
+    setCodeInput(event.target.value);
+    if (codeError) {
+      setCodeError(null);
+    }
+  };
+
+  const handleReleaseClick = () => {
+    setPendingLevel(null);
+    setCodeInput('');
+    setCodeError(null);
+    onRelease();
+  };
 
   return (
     <Card title="Accès SSI">
@@ -170,7 +217,7 @@ const AccessLevelStatus = ({
             return (
               <Button
                 key={level}
-                onClick={() => onActivate(level)}
+                onClick={() => handleRequestActivation(level)}
                 disabled={!isGranted || isActive}
                 className="bg-indigo-100 text-indigo-700 hover:bg-indigo-200 disabled:cursor-not-allowed disabled:opacity-60"
               >
@@ -179,13 +226,47 @@ const AccessLevelStatus = ({
             );
           })}
           <Button
-            onClick={onRelease}
+            onClick={handleReleaseClick}
             disabled={activeLevel === 0}
             className="sm:col-span-2 bg-slate-200 text-slate-700 hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-60"
           >
             Libérer l'accès
           </Button>
         </div>
+        {pendingLevel && (
+          <form
+            onSubmit={handleCodeSubmit}
+            className="space-y-2 rounded border border-indigo-100 bg-indigo-50 p-3 text-xs text-slate-600"
+          >
+            <p>
+              Code requis pour {ACCESS_LEVELS[pendingLevel].label}. Entrez le code d'accès pour libérer ce niveau.
+            </p>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                type="password"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={8}
+                value={codeInput}
+                onChange={handleCodeChange}
+                className="flex-1 rounded border border-indigo-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+                placeholder="Code d'accès"
+                aria-label={`Code d'accès pour ${ACCESS_LEVELS[pendingLevel].label}`}
+              />
+              <Button
+                type="submit"
+                className="bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
+                disabled={codeInput.trim().length === 0}
+              >
+                Valider le code
+              </Button>
+            </div>
+            {codeError && <p className="text-xs font-medium text-rose-600">{codeError}</p>}
+            <p className="text-[0.65rem] text-slate-500">
+              Besoin d'un autre niveau ? Sélectionnez-le dans la liste ci-dessus pour saisir un nouveau code.
+            </p>
+          </form>
+        )}
         <div>
           <h4 className="text-xs font-semibold uppercase text-slate-500">Droits par niveau</h4>
           <ul className="mt-2 space-y-1 text-xs text-slate-500">
