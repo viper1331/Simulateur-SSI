@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Scenario, ScenarioEvent, User } from '@ssi/shared-models';
+import logger from './logger';
 
 const sessionIdForTrainee = (traineeId: string) => `session-${traineeId}`;
 
@@ -86,11 +87,13 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
       return;
     }
 
+    logger.info('Initialisation de la connexion formateur', { sessionId });
     set({ connectionStatus: 'connecting' });
 
     await get().fetchScenarios();
 
     if (typeof WebSocket !== 'undefined') {
+      logger.debug('Ouverture du WebSocket', { wsUrl: WS_URL });
       socket = new WebSocket(WS_URL);
       socket.addEventListener('open', () => {
         socket?.send(
@@ -101,11 +104,13 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
             token: auth.token
           })
         );
+        logger.info('WebSocket connecté');
         set({ connectionStatus: 'connected' });
       });
 
       socket.addEventListener('message', (event) => {
         const data = JSON.parse(event.data);
+        logger.debug('Message reçu du WebSocket', data);
         if (data.type === 'SESSION_STATE') {
           set({ session: data.payload });
         }
@@ -114,18 +119,25 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
       socket.addEventListener('close', () => {
         socket = undefined;
         const hasSession = Boolean(get().auth && get().sessionId);
+        logger.warn('WebSocket fermé', { hasSession });
         set({ connectionStatus: hasSession ? 'error' : 'idle' });
+      });
+
+      socket.addEventListener('error', (event) => {
+        logger.error('Erreur WebSocket', event);
       });
     }
   },
   disconnect() {
     if (socket) {
+      logger.info('Fermeture de la connexion WebSocket demandée');
       socket.close();
       socket = undefined;
     }
     set({ connectionStatus: 'idle', session: undefined });
   },
   async login({ email, password }) {
+    logger.info('Tentative de connexion formateur', { email });
     try {
       const response = await fetch(`${API_URL}/api/auth/login`, {
         method: 'POST',
@@ -135,6 +147,7 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
       if (!response.ok) {
         const payload = await response.json().catch(() => undefined);
         set({ authError: payload?.error ?? 'Identifiants incorrects.' });
+        logger.warn('Connexion formateur échouée', { email, status: response.status, error: payload?.error });
         return false;
       }
       const payload = (await response.json()) as { user: User; token: string };
@@ -142,16 +155,19 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
         auth: payload,
         authError: undefined
       });
+      logger.info('Connexion formateur réussie', { email });
       await get().fetchTrainees();
       await get().fetchScenarios();
       return true;
     } catch (error) {
       console.error('Trainer login error', error);
+      logger.error('Erreur lors de la connexion formateur', error);
       set({ authError: 'Connexion impossible. Veuillez réessayer.' });
       return false;
     }
   },
   async register({ name, email, password }) {
+    logger.info('Création d’un compte formateur', { email });
     try {
       const response = await fetch(`${API_URL}/api/auth/register`, {
         method: 'POST',
@@ -161,20 +177,24 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
       if (!response.ok) {
         const payload = await response.json().catch(() => undefined);
         set({ authError: payload?.error ?? "Inscription formateur impossible." });
+        logger.warn('Inscription formateur refusée', { email, status: response.status, error: payload?.error });
         return false;
       }
       const payload = (await response.json()) as { user: User; token: string };
       set({ auth: payload, authError: undefined });
+      logger.info('Compte formateur créé', { email });
       await get().fetchTrainees();
       await get().fetchScenarios();
       return true;
     } catch (error) {
       console.error('Trainer register error', error);
+      logger.error('Erreur lors de l’inscription formateur', error);
       set({ authError: "Impossible de créer le compte formateur." });
       return false;
     }
   },
   logout() {
+    logger.info('Déconnexion du formateur demandée');
     get().disconnect();
     set({ auth: undefined, sessionId: undefined, selectedTraineeId: undefined, authError: undefined });
   },
@@ -184,17 +204,21 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
   async fetchScenarios() {
     if (typeof fetch === 'undefined') return;
     try {
+      logger.debug('Chargement des scénarios disponibles', { apiUrl: `${API_URL}/api/scenarios` });
       const response = await fetch(`${API_URL}/api/scenarios`);
       const scenarios: Scenario[] = await response.json();
       set({ scenarios });
+      logger.info('Scénarios chargés', { total: scenarios.length });
     } catch (error) {
       console.error('Failed to load scenarios', error);
+      logger.error('Erreur lors du chargement des scénarios', error);
     }
   },
   async fetchTrainees() {
     const { auth } = get();
     if (!auth || typeof fetch === 'undefined') return;
     try {
+      logger.debug('Récupération des apprenants', { apiUrl: `${API_URL}/api/users?role=TRAINEE` });
       const response = await fetch(`${API_URL}/api/users?role=TRAINEE`, {
         headers: { Authorization: `Bearer ${auth.token}` }
       });
@@ -203,8 +227,10 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
       }
       const trainees = (await response.json()) as User[];
       set({ trainees });
+      logger.info('Apprenants chargés', { total: trainees.length });
     } catch (error) {
       console.error('Failed to load trainees', error);
+      logger.error('Erreur lors du chargement des apprenants', error);
     }
   },
   selectTrainee(traineeId) {
@@ -213,11 +239,13 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
     if (connectionStatus === 'connected' || connectionStatus === 'connecting') {
       get().disconnect();
     }
+    logger.info('Sélection d’un apprenant', { traineeId, sessionId: newSessionId });
     set({ selectedTraineeId: traineeId, sessionId: newSessionId, session: undefined });
   },
   startScenario(scenarioId) {
     const { selectedTraineeId, sessionId, auth } = get();
     if (!selectedTraineeId || !sessionId || !auth) return;
+    logger.info('Démarrage d’un scénario', { scenarioId, sessionId, traineeId: selectedTraineeId });
     socket?.send(
       JSON.stringify({
         type: 'START_SCENARIO',
@@ -231,6 +259,7 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
   triggerEvent(event) {
     const { sessionId, auth } = get();
     if (!sessionId || !auth) return;
+    logger.debug('Déclenchement d’un évènement', { event });
     socket?.send(
       JSON.stringify({
         type: 'TRIGGER_EVENT',
@@ -243,9 +272,11 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
   stopScenario() {
     const { sessionId, auth } = get();
     if (!sessionId || !auth) return;
+    logger.info('Arrêt du scénario en cours', { sessionId });
     socket?.send(JSON.stringify({ type: 'STOP_SCENARIO', sessionId, token: auth.token }));
   },
   async createTrainee({ name, email, password }) {
+    logger.info('Création d’un compte apprenant', { email });
     try {
       const response = await fetch(`${API_URL}/api/auth/register`, {
         method: 'POST',
@@ -255,12 +286,19 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
       if (!response.ok) {
         const payload = await response.json().catch(() => undefined);
         set({ authError: payload?.error ?? 'Impossible de créer cet apprenant.' });
+        logger.warn('Création du compte apprenant refusée', {
+          email,
+          status: response.status,
+          error: payload?.error
+        });
         return false;
       }
       await get().fetchTrainees();
+      logger.info('Compte apprenant créé', { email });
       return true;
     } catch (error) {
       console.error('Create trainee error', error);
+      logger.error('Erreur lors de la création du compte apprenant', error);
       set({ authError: 'Création du compte apprenant impossible.' });
       return false;
     }
