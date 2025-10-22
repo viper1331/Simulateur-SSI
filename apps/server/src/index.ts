@@ -8,6 +8,8 @@ import {
   ScenarioEvent,
   userRoleSchema,
   userSchema,
+  getAccessLevelLabel,
+  type AccessLevel,
   type UserRole
 } from '@ssi/shared-models';
 import { v4 as uuid } from 'uuid';
