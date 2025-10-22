@@ -6,12 +6,30 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { defaultScenarios, ScenarioEvent } from '@ssi/shared-models';
 import { v4 as uuid } from 'uuid';
 
+const parseJson = <T>(value: string | null | undefined): T | undefined => {
+  if (!value) return undefined;
+  try {
+    return JSON.parse(value) as T;
+  } catch (error) {
+    console.warn('Failed to parse JSON value', error);
+    return undefined;
+  }
+};
+
 interface TimelineEntry {
   id: string;
   timestamp: number;
   message: string;
   category: 'event' | 'action' | 'system';
 }
+
+type ScenarioConfig = {
+  t1?: number;
+  t2?: number;
+  zd?: Array<Record<string, unknown>>;
+  zf?: Array<Record<string, unknown>>;
+  das?: Array<Record<string, unknown>>;
+};
 
 interface SessionState {
   id: string;
@@ -123,23 +141,26 @@ app.get('/api/scenarios', async (_req, res) => {
   if (scenarios.length === 0) {
     return res.json(defaultScenarios);
   }
-  const mapped = scenarios.map((scenario) => ({
-    id: scenario.id,
-    name: scenario.name,
-    description: scenario.description,
-    t1: (scenario.config as any)?.t1 ?? 15,
-    t2: (scenario.config as any)?.t2 ?? 5,
-    zd: (scenario.config as any)?.zd ?? [],
-    zf: (scenario.config as any)?.zf ?? [],
-    das: (scenario.config as any)?.das ?? [],
-    events: scenario.events.map((event) => ({
-      id: event.id,
-      scenarioId: scenario.id,
-      timestamp: event.offset,
-      type: event.type as ScenarioEvent['type'],
-      payload: event.payload as Record<string, unknown>
-    }))
-  }));
+  const mapped = scenarios.map((scenario) => {
+    const config = parseJson<ScenarioConfig>(scenario.config) ?? {};
+    return {
+      id: scenario.id,
+      name: scenario.name,
+      description: scenario.description,
+      t1: config.t1 ?? 15,
+      t2: config.t2 ?? 5,
+      zd: config.zd ?? [],
+      zf: config.zf ?? [],
+      das: config.das ?? [],
+      events: scenario.events.map((event) => ({
+        id: event.id,
+        scenarioId: scenario.id,
+        timestamp: event.offset,
+        type: event.type as ScenarioEvent['type'],
+        payload: parseJson<Record<string, unknown>>(event.payload) ?? {}
+      }))
+    };
+  });
   res.json(mapped);
 });
 
@@ -151,7 +172,13 @@ app.get('/api/runs/:runId', async (req, res) => {
   if (!run) {
     return res.status(404).json({ error: 'Run not found' });
   }
-  res.json(run);
+  res.json({
+    ...run,
+    actions: run.actions.map((action) => ({
+      ...action,
+      payload: parseJson<Record<string, unknown>>(action.payload) ?? {}
+    }))
+  });
 });
 
 const server = http.createServer(app);
@@ -185,7 +212,7 @@ const persistAction = async (session: Session, type: string, payload: Record<str
     data: {
       runId: session.state.runId,
       type,
-      payload
+      payload: JSON.stringify(payload ?? {})
     }
   });
 };
