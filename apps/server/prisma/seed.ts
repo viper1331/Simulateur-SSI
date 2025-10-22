@@ -11,7 +11,8 @@ async function main() {
       t2: scenario.t2,
       zd: scenario.zd,
       zf: scenario.zf,
-      das: scenario.das
+      das: scenario.das,
+      peripherals: scenario.peripherals
     });
     await prisma.scenario.upsert({
       where: { id: scenario.id },

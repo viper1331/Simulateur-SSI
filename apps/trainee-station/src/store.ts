@@ -26,6 +26,7 @@ type SessionSnapshot = {
   ackTimestamp?: number;
   outOfService: { zd: string[]; das: string[] };
   activeAlarms: { dm: string[]; dai: string[] };
+  accessLevel: AccessLevel;
 };
 
 type AuthState = {

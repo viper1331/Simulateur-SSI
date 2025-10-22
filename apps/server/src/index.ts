@@ -32,6 +32,7 @@ type ScenarioConfig = {
   zd?: Array<Record<string, unknown>>;
   zf?: Array<Record<string, unknown>>;
   das?: Array<Record<string, unknown>>;
+  peripherals?: Array<Record<string, unknown>>;
 };
 
 interface SessionState {
@@ -55,6 +56,7 @@ interface SessionState {
   ackTimestamp?: number;
   outOfService: { zd: string[]; das: string[] };
   activeAlarms: { dm: string[]; dai: string[] };
+  accessLevel: AccessLevel;
 }
 
 interface Session {
@@ -315,6 +317,7 @@ app.get('/api/scenarios', async (_req, res) => {
       zd: config.zd ?? [],
       zf: config.zf ?? [],
       das: config.das ?? [],
+      peripherals: config.peripherals ?? [],
       events: scenario.events.map((event) => ({
         id: event.id,
         scenarioId: scenario.id,
@@ -363,7 +366,8 @@ const ensureSession = (sessionId: string): Session => {
         score: 0,
         awaitingReset: false,
         outOfService: { zd: [], das: [] },
-        activeAlarms: { dm: [], dai: [] }
+        activeAlarms: { dm: [], dai: [] },
+        accessLevel: 0
       }
     };
     sessions.set(sessionId, session);
@@ -534,6 +538,25 @@ const handleMessage = async (ws: WebSocket, message: ClientMessage) => {
         console.error('START_SCENARIO error', error);
         sendWsError(ws, error instanceof Error ? error.message : 'Erreur lors du démarrage du scénario.');
       }
+      break;
+    }
+    case 'SET_ACCESS_LEVEL': {
+      const session = ensureSession(message.sessionId);
+      const nextLevel = Math.max(0, Math.min(message.level, 3)) as AccessLevel;
+      session.state.accessLevel = nextLevel;
+      const label = getAccessLevelLabel(nextLevel);
+      addTimeline(
+        session,
+        nextLevel === 0
+          ? 'Accès SSI verrouillé par le formateur'
+          : `Niveau d'accès ${label} activé par le formateur`,
+        'action'
+      );
+      await persistAction(session, 'SET_ACCESS_LEVEL', {
+        trainerId: message.trainerId,
+        level: nextLevel
+      });
+      broadcast(session);
       break;
     }
     case 'TRIGGER_EVENT': {
