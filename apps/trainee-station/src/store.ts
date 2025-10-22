@@ -1,5 +1,7 @@
 import { create } from 'zustand';
-import type { Scenario, ScenarioEvent } from '@ssi/shared-models';
+import type { Scenario, ScenarioEvent, User } from '@ssi/shared-models';
+
+const sessionIdForUser = (user: User) => `session-${user.id}`;
 
 type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error';
 
@@ -7,6 +9,8 @@ type SessionSnapshot = {
   id: string;
   scenarioId?: string;
   runId?: string;
+  trainerId?: string;
+  traineeId?: string;
   t1?: number;
   t2?: number;
   t1Remaining?: number;
@@ -24,13 +28,24 @@ type SessionSnapshot = {
   activeAlarms: { dm: string[]; dai: string[] };
 };
 
+type AuthState = {
+  user: User;
+  token: string;
+};
+
 type SessionStore = {
+  auth?: AuthState;
+  authError?: string;
   connectionStatus: ConnectionStatus;
-  sessionId: string;
-  userId: string;
+  sessionId?: string;
   session?: SessionSnapshot;
   scenarios: Scenario[];
-  connect: () => void;
+  connect: () => Promise<void>;
+  disconnect: () => void;
+  login: (credentials: { email: string; password: string }) => Promise<boolean>;
+  register: (payload: { name: string; email: string; password: string }) => Promise<boolean>;
+  logout: () => void;
+  clearError: () => void;
   ack: () => void;
   reset: () => void;
   stopUGA: () => void;
@@ -56,20 +71,30 @@ const API_URL = metaEnv.VITE_SERVER_API ?? nodeEnv.VITE_SERVER_API ?? 'http://lo
 let socket: WebSocket | undefined;
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
+  auth: undefined,
+  authError: undefined,
   connectionStatus: 'idle',
-  sessionId: 'formation-demo',
-  userId: 'trainee-demo',
+  sessionId: undefined,
   scenarios: [],
-  connect: async () => {
-    const { connectionStatus, sessionId } = get();
+  session: undefined,
+  async connect() {
+    const { auth, connectionStatus, sessionId } = get();
+    if (!auth) return;
     if (connectionStatus === 'connected' || connectionStatus === 'connecting') {
       return;
     }
-    set({ connectionStatus: 'connecting' });
+
+    const resolvedSessionId = sessionId ?? sessionIdForUser(auth.user);
+    set({ connectionStatus: 'connecting', sessionId: resolvedSessionId });
+
     if (typeof fetch !== 'undefined') {
-      const response = await fetch(`${API_URL}/api/scenarios`);
-      const scenarios: Scenario[] = await response.json();
-      set({ scenarios });
+      try {
+        const response = await fetch(`${API_URL}/api/scenarios`);
+        const scenarios: Scenario[] = await response.json();
+        set({ scenarios });
+      } catch (error) {
+        console.error('Failed to load scenarios', error);
+      }
     }
 
     if (typeof WebSocket !== 'undefined') {
@@ -78,9 +103,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         socket?.send(
           JSON.stringify({
             type: 'INIT',
-            sessionId,
+            sessionId: resolvedSessionId,
             role: 'trainee',
-            userId: get().userId
+            token: auth.token
           })
         );
         set({ connectionStatus: 'connected' });
@@ -97,29 +122,99 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       });
 
       socket.addEventListener('close', () => {
-        set({ connectionStatus: 'error' });
+        socket = undefined;
+        const hasAuth = Boolean(get().auth);
+        set({ connectionStatus: hasAuth ? 'error' : 'idle' });
       });
     }
   },
-  ack: () => {
-    const { sessionId, userId } = get();
-    socket?.send(JSON.stringify({ type: 'ACK', sessionId, userId }));
+  disconnect() {
+    if (socket) {
+      socket.close();
+      socket = undefined;
+    }
+    set({ connectionStatus: 'idle', session: undefined });
   },
-  reset: () => {
-    const { sessionId, userId } = get();
-    socket?.send(JSON.stringify({ type: 'RESET', sessionId, userId }));
+  async login({ email, password }) {
+    try {
+      const response = await fetch(`${API_URL}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => undefined);
+        set({ authError: payload?.error ?? 'Identifiants incorrects.' });
+        return false;
+      }
+      const payload = (await response.json()) as { user: User; token: string };
+      set({
+        auth: payload,
+        authError: undefined,
+        sessionId: sessionIdForUser(payload.user)
+      });
+      return true;
+    } catch (error) {
+      console.error('Login error', error);
+      set({ authError: 'Connexion impossible. Veuillez réessayer.' });
+      return false;
+    }
   },
-  stopUGA: () => {
-    const { sessionId, userId } = get();
-    socket?.send(JSON.stringify({ type: 'UGA_STOP', sessionId, userId }));
+  async register({ name, email, password }) {
+    try {
+      const response = await fetch(`${API_URL}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, password, role: 'TRAINEE' })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => undefined);
+        set({ authError: payload?.error ?? 'Inscription impossible.' });
+        return false;
+      }
+      const payload = (await response.json()) as { user: User; token: string };
+      set({
+        auth: payload,
+        authError: undefined,
+        sessionId: sessionIdForUser(payload.user)
+      });
+      return true;
+    } catch (error) {
+      console.error('Register error', error);
+      set({ authError: "Impossible de créer le compte." });
+      return false;
+    }
   },
-  setOutOfService: ({ targetType, targetId, active, label }) => {
-    const { sessionId, userId } = get();
+  logout() {
+    get().disconnect();
+    set({ auth: undefined, sessionId: undefined, authError: undefined });
+  },
+  clearError() {
+    set({ authError: undefined });
+  },
+  ack() {
+    const { sessionId, auth } = get();
+    if (!auth || !sessionId) return;
+    socket?.send(JSON.stringify({ type: 'ACK', sessionId, token: auth.token }));
+  },
+  reset() {
+    const { sessionId, auth } = get();
+    if (!auth || !sessionId) return;
+    socket?.send(JSON.stringify({ type: 'RESET', sessionId, token: auth.token }));
+  },
+  stopUGA() {
+    const { sessionId, auth } = get();
+    if (!auth || !sessionId) return;
+    socket?.send(JSON.stringify({ type: 'UGA_STOP', sessionId, token: auth.token }));
+  },
+  setOutOfService({ targetType, targetId, active, label }) {
+    const { sessionId, auth } = get();
+    if (!auth || !sessionId) return;
     socket?.send(
       JSON.stringify({
         type: 'SET_OUT_OF_SERVICE',
         sessionId,
-        userId,
+        token: auth.token,
         targetType,
         targetId,
         active,
@@ -127,12 +222,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       })
     );
   },
-  triggerEvent: (event) => {
-    const { sessionId } = get();
+  triggerEvent(event) {
+    const { sessionId, auth } = get();
+    if (!auth || !sessionId) return;
     socket?.send(
       JSON.stringify({
         type: 'TRIGGER_EVENT',
         sessionId,
+        token: auth.token,
         event
       })
     );

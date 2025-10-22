@@ -7,11 +7,20 @@ datasource db {
   url      = "file:../db/dev.db"
 }
 
+enum UserRole {
+  TRAINER
+  TRAINEE
+}
+
 model User {
-  id        String   @id @default(cuid())
-  name      String
-  role      String
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  name           String
+  email          String   @unique
+  passwordHash   String
+  role           UserRole
+  createdAt      DateTime @default(now())
+  runsAsTrainee  Run[]    @relation("RunsAsTrainee")
+  runsAsTrainer  Run[]    @relation("RunsAsTrainer")
 }
 
 model Scenario {
@@ -38,7 +47,9 @@ model Run {
   id         String   @id @default(cuid())
   scenario   Scenario @relation(fields: [scenarioId], references: [id])
   scenarioId String
+  trainee    User     @relation("RunsAsTrainee", fields: [traineeId], references: [id])
   traineeId  String
+  trainer    User     @relation("RunsAsTrainer", fields: [trainerId], references: [id])
   trainerId  String
   startedAt  DateTime @default(now())
   endedAt    DateTime?

@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcryptjs';
 import { defaultScenarios } from '@ssi/shared-models';
 
 const prisma = new PrismaClient();
@@ -34,6 +35,39 @@ async function main() {
       }
     });
   }
+
+  const trainerHash = await bcrypt.hash('Formateur!2024', 10);
+  const traineeHash = await bcrypt.hash('Apprenant!2024', 10);
+
+  await prisma.user.upsert({
+    where: { email: 'formateur.demo@ssi.fr' },
+    update: {
+      name: 'Formateur Démo',
+      passwordHash: trainerHash,
+      role: 'TRAINER'
+    },
+    create: {
+      name: 'Formateur Démo',
+      email: 'formateur.demo@ssi.fr',
+      passwordHash: trainerHash,
+      role: 'TRAINER'
+    }
+  });
+
+  await prisma.user.upsert({
+    where: { email: 'apprenant.demo@ssi.fr' },
+    update: {
+      name: 'Apprenant Démo',
+      passwordHash: traineeHash,
+      role: 'TRAINEE'
+    },
+    create: {
+      name: 'Apprenant Démo',
+      email: 'apprenant.demo@ssi.fr',
+      passwordHash: traineeHash,
+      role: 'TRAINEE'
+    }
+  });
 
   console.log('✅ Base de données Prisma initialisée.');
 }
