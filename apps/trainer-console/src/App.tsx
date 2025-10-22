@@ -3,6 +3,8 @@ import { Button, Card, Indicator } from '@ssi/ui-kit';
 import { useTrainerStore } from './store';
 import type { Scenario, User } from '@ssi/shared-models';
 import { initialScoreRules } from '@ssi/shared-models';
+import DebugConsole from './DebugConsole';
+import logger from './logger';
 
 type ActiveAlarms = { dm: string[]; dai: string[] };
 
@@ -1359,6 +1361,7 @@ const App = () => {
   const [isCreatingTrainee, setIsCreatingTrainee] = useState(false);
   const [creationFeedback, setCreationFeedback] = useState<string | undefined>();
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | undefined>();
+  const [isDebugOpen, setIsDebugOpen] = useState(false);
 
   useEffect(() => {
     if (auth) {
@@ -1378,6 +1381,26 @@ const App = () => {
       setSelectedScenarioId((current) => current ?? session.scenarioId);
     }
   }, [session?.scenarioId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleKeydown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'd') {
+        event.preventDefault();
+        setIsDebugOpen((open) => !open);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeydown);
+    return () => window.removeEventListener('keydown', handleKeydown);
+  }, []);
+
+  useEffect(() => {
+    if (isDebugOpen) {
+      logger.info('Console de debug ouverte');
+    }
+  }, [isDebugOpen]);
 
   const activeScenarioId = selectedScenarioId ?? session?.scenarioId;
   const scenario = useMemo(() => {
@@ -1441,9 +1464,26 @@ const App = () => {
     }
   };
 
+  const toggleDebugConsole = () => setIsDebugOpen((open) => !open);
+
+  const renderDebugControls = () => (
+    <>
+      <DebugConsole open={isDebugOpen} onClose={() => setIsDebugOpen(false)} />
+      <button
+        type="button"
+        onClick={toggleDebugConsole}
+        className="fixed bottom-4 right-4 z-40 rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white shadow-lg transition hover:bg-black"
+        title="Ouvrir la console de debug (Ctrl+D)"
+      >
+        {isDebugOpen ? 'Fermer la console' : 'Console debug'}
+      </button>
+    </>
+  );
+
   if (!auth) {
     return (
-      <div className="min-h-screen bg-slate-100 p-6">
+      <>
+        <div className="min-h-screen bg-slate-100 p-6">
         <div className="mx-auto flex max-w-xl flex-col gap-6">
           <header className="text-center">
             <p className="text-xs uppercase tracking-[0.35em] text-indigo-500">Simulation SSI</p>
@@ -1533,12 +1573,15 @@ const App = () => {
             )}
           </div>
         </div>
-      </div>
+        </div>
+        {renderDebugControls()}
+      </>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 pb-12">
+    <>
+      <div className="min-h-screen bg-slate-100 pb-12">
       <div className="mx-auto max-w-7xl space-y-6 px-4 py-8">
         <div className="overflow-hidden rounded-3xl bg-gradient-to-r from-slate-900 via-indigo-900 to-slate-800 p-6 text-white shadow-xl">
           <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
@@ -1723,7 +1766,9 @@ const App = () => {
           </main>
         </div>
       </div>
-    </div>
+      </div>
+      {renderDebugControls()}
+    </>
   );
 };
 
