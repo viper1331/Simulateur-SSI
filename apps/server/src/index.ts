@@ -3,8 +3,7 @@ import express from 'express';
 import http from 'http';
 import { PrismaClient } from '@prisma/client';
 import { WebSocketServer, WebSocket } from 'ws';
-import { defaultScenarios, getAccessLevelLabel } from '@ssi/shared-models';
-import type { AccessLevel, ScenarioEvent } from '@ssi/shared-models';
+import { defaultScenarios, Scenario, ScenarioEvent } from '@ssi/shared-models';
 import { v4 as uuid } from 'uuid';
 
 const parseJson = <T>(value: string | null | undefined): T | undefined => {
@@ -30,6 +29,7 @@ type ScenarioConfig = {
   zd?: Array<Record<string, unknown>>;
   zf?: Array<Record<string, unknown>>;
   das?: Array<Record<string, unknown>>;
+  peripherals?: Array<Record<string, unknown>>;
 };
 
 interface SessionState {
@@ -65,7 +65,14 @@ type ClientRole = 'trainer' | 'trainee';
 
 type ClientMessage =
   | { type: 'INIT'; sessionId: string; role: ClientRole; userId?: string }
-  | { type: 'START_SCENARIO'; sessionId: string; scenarioId: string; trainerId: string; traineeId: string }
+  | {
+      type: 'START_SCENARIO';
+      sessionId: string;
+      scenarioId: string;
+      trainerId: string;
+      traineeId: string;
+      scenario?: Scenario;
+    }
   | { type: 'TRIGGER_EVENT'; sessionId: string; event: ScenarioEvent }
   | { type: 'SET_ACCESS_LEVEL'; sessionId: string; level: AccessLevel; trainerId: string }
   | { type: 'ACK'; sessionId: string; userId: string }
@@ -166,6 +173,7 @@ app.get('/api/scenarios', async (_req, res) => {
       zd: config.zd ?? [],
       zf: config.zf ?? [],
       das: config.das ?? [],
+      peripherals: config.peripherals ?? [],
       events: scenario.events.map((event) => ({
         id: event.id,
         scenarioId: scenario.id,
@@ -325,7 +333,7 @@ const handleMessage = async (ws: WebSocket, message: ClientMessage) => {
     case 'START_SCENARIO': {
       const session = ensureSession(message.sessionId);
       resetTick(session);
-      const scenario = defaultScenarios.find((s) => s.id === message.scenarioId);
+      const scenario = message.scenario ?? defaultScenarios.find((s) => s.id === message.scenarioId);
       if (!scenario) {
         return ws.send(JSON.stringify({ type: 'ERROR', message: 'Scenario inconnu' } satisfies ServerMessage));
       }

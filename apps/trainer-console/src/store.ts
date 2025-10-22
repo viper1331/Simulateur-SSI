@@ -36,7 +36,7 @@ type TrainerStore = {
   startScenario: (scenarioId: string) => void;
   triggerEvent: (event: ScenarioEvent) => void;
   stopScenario: () => void;
-  setAccessLevel: (level: AccessLevel) => void;
+  updateScenario: (scenario: Scenario) => void;
 };
 
 declare global {
@@ -94,14 +94,16 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
     }
   },
   startScenario: (scenarioId) => {
-    const { sessionId, trainerId, traineeId } = get();
+    const { sessionId, trainerId, traineeId, scenarios } = get();
+    const scenario = scenarios.find((item) => item.id === scenarioId);
     socket?.send(
       JSON.stringify({
         type: 'START_SCENARIO',
         sessionId,
         scenarioId,
         trainerId,
-        traineeId
+        traineeId,
+        scenario
       })
     );
   },
@@ -117,14 +119,9 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
   stopScenario: () => {
     socket?.send(JSON.stringify({ type: 'STOP_SCENARIO', sessionId: get().sessionId }));
   },
-  setAccessLevel: (level) => {
-    socket?.send(
-      JSON.stringify({
-        type: 'SET_ACCESS_LEVEL',
-        sessionId: get().sessionId,
-        level,
-        trainerId: get().trainerId
-      })
-    );
+  updateScenario: (scenario) => {
+    set((state) => ({
+      scenarios: state.scenarios.map((item) => (item.id === scenario.id ? scenario : item))
+    }));
   }
 }));
