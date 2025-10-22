@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Indicator } from '@ssi/ui-kit';
 import { useTrainerStore } from './store';
-import type { Scenario, ScenarioEvent } from '@ssi/shared-models';
+import type { Scenario, User } from '@ssi/shared-models';
 import { initialScoreRules } from '@ssi/shared-models';
 
 type ActiveAlarms = { dm: string[]; dai: string[] };
@@ -174,6 +174,42 @@ const ScenarioSelector = ({
   </Card>
 );
 
+const TraineeSelector = ({
+  trainees,
+  selectedTraineeId,
+  onSelect
+}: {
+  trainees: User[];
+  selectedTraineeId?: string;
+  onSelect: (id: string) => void;
+}) => (
+  <Card title="Apprenants disponibles">
+    {trainees.length > 0 ? (
+      <div className="flex flex-col gap-2">
+        {trainees.map((trainee) => {
+          const isActive = trainee.id === selectedTraineeId;
+          return (
+            <Button
+              key={trainee.id}
+              onClick={() => onSelect(trainee.id)}
+              className={`flex w-full flex-col items-start gap-1 border ${
+                isActive
+                  ? 'border-emerald-500 bg-emerald-600 text-white hover:bg-emerald-700'
+                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <span className="text-sm font-semibold">{trainee.name}</span>
+              <span className="text-xs text-slate-500">{trainee.email}</span>
+            </Button>
+          );
+        })}
+      </div>
+    ) : (
+      <p className="text-sm text-slate-500">Créez un apprenant pour commencer une session.</p>
+    )}
+  </Card>
+);
+
 const Timeline = () => {
   const timeline = useTrainerStore((state) => state.session?.timeline ?? []);
   return (
@@ -303,17 +339,23 @@ const ScorePanel = () => {
 };
 
 const SessionOverview = ({ scenario }: { scenario?: Scenario }) => {
-  const { session, sessionId, trainerId, traineeId, connectionStatus } = useTrainerStore((state) => ({
-    session: state.session,
-    sessionId: state.sessionId,
-    trainerId: state.trainerId,
-    traineeId: state.traineeId,
-    connectionStatus: state.connectionStatus
-  }));
+  const session = useTrainerStore((state) => state.session);
+  const sessionId = useTrainerStore((state) => state.sessionId);
+  const connectionStatus = useTrainerStore((state) => state.connectionStatus);
+  const selectedTraineeId = useTrainerStore((state) => state.selectedTraineeId);
+  const trainees = useTrainerStore((state) => state.trainees);
+  const trainerName = useTrainerStore((state) => state.auth?.user.name);
 
   const connectionTone: 'danger' | 'warning' | 'ok' =
     connectionStatus === 'connected' ? 'ok' : connectionStatus === 'error' ? 'danger' : 'warning';
   const activeAlarms = session?.activeAlarms ?? { dm: [], dai: [] };
+  const selectedTrainee = useMemo(
+    () => trainees.find((trainee) => trainee.id === selectedTraineeId),
+    [trainees, selectedTraineeId]
+  );
+
+  const trainerLabel = trainerName ?? session?.trainerId ?? '—';
+  const traineeLabel = selectedTrainee?.name ?? session?.traineeId ?? '—';
 
   return (
     <Card title="Session en cours">
@@ -324,11 +366,11 @@ const SessionOverview = ({ scenario }: { scenario?: Scenario }) => {
         </div>
         <div className="flex items-center justify-between">
           <span className="font-semibold text-slate-600">Formateur</span>
-          <span>{trainerId}</span>
+          <span>{trainerLabel}</span>
         </div>
         <div className="flex items-center justify-between">
           <span className="font-semibold text-slate-600">Apprenant</span>
-          <span>{traineeId}</span>
+          <span>{traineeLabel}</span>
         </div>
         <div className="flex items-center justify-between">
           <span className="font-semibold text-slate-600">Scénario</span>
@@ -1291,27 +1333,209 @@ const ScenarioEditor = ({ scenario, onUpdate }: { scenario?: Scenario; onUpdate:
 };
 
 const App = () => {
-  const { connect, startScenario, scenarios, session, sessionId, trainerId, traineeId, connectionStatus, updateScenario } =
-    useTrainerStore((state) => ({
-      connect: state.connect,
-      startScenario: state.startScenario,
-      scenarios: state.scenarios,
-      session: state.session,
-      sessionId: state.sessionId,
-      trainerId: state.trainerId,
-      traineeId: state.traineeId,
-      connectionStatus: state.connectionStatus,
-      updateScenario: state.updateScenario
-    }));
+  const session = useTrainerStore((state) => state.session);
+  const scenarios = useTrainerStore((state) => state.scenarios);
+  const trainees = useTrainerStore((state) => state.trainees);
+  const selectedTraineeId = useTrainerStore((state) => state.selectedTraineeId);
+  const selectTrainee = useTrainerStore((state) => state.selectTrainee);
+  const connectionStatus = useTrainerStore((state) => state.connectionStatus);
+  const sessionId = useTrainerStore((state) => state.sessionId);
+  const auth = useTrainerStore((state) => state.auth);
+  const authError = useTrainerStore((state) => state.authError);
+  const login = useTrainerStore((state) => state.login);
+  const register = useTrainerStore((state) => state.register);
+  const logout = useTrainerStore((state) => state.logout);
+  const clearError = useTrainerStore((state) => state.clearError);
+  const connect = useTrainerStore((state) => state.connect);
+  const fetchTrainees = useTrainerStore((state) => state.fetchTrainees);
+  const fetchScenarios = useTrainerStore((state) => state.fetchScenarios);
+  const createTrainee = useTrainerStore((state) => state.createTrainee);
+  const startScenario = useTrainerStore((state) => state.startScenario);
 
-  const scenario = useMemo(
-    () => scenarios.find((item) => item.id === session?.scenarioId),
-    [scenarios, session?.scenarioId]
-  );
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [newTraineeForm, setNewTraineeForm] = useState({ name: '', email: '', password: '' });
+  const [isCreatingTrainee, setIsCreatingTrainee] = useState(false);
+  const [creationFeedback, setCreationFeedback] = useState<string | undefined>();
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string | undefined>();
 
   useEffect(() => {
-    connect();
-  }, [connect]);
+    if (auth) {
+      void fetchScenarios();
+      void fetchTrainees();
+    }
+  }, [auth, fetchScenarios, fetchTrainees]);
+
+  useEffect(() => {
+    if (auth && sessionId && connectionStatus === 'idle') {
+      void connect();
+    }
+  }, [auth, sessionId, connectionStatus, connect]);
+
+  useEffect(() => {
+    if (session?.scenarioId) {
+      setSelectedScenarioId((current) => current ?? session.scenarioId);
+    }
+  }, [session?.scenarioId]);
+
+  const activeScenarioId = selectedScenarioId ?? session?.scenarioId;
+  const scenario = useMemo(() => {
+    if (!activeScenarioId) return undefined;
+    return scenarios.find((item) => item.id === activeScenarioId);
+  }, [scenarios, activeScenarioId]);
+
+  const selectedTrainee = useMemo(
+    () => trainees.find((trainee) => trainee.id === selectedTraineeId),
+    [trainees, selectedTraineeId]
+  );
+
+  const canLaunchScenario = Boolean(selectedScenarioId && selectedTraineeId && connectionStatus === 'connected');
+
+  const handleAuthInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = event.target;
+    setAuthForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleAuthSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    clearError();
+    setIsSubmitting(true);
+    const success =
+      authMode === 'login'
+        ? await login({ email: authForm.email, password: authForm.password })
+        : await register({ name: authForm.name, email: authForm.email, password: authForm.password });
+    setIsSubmitting(false);
+    if (success) {
+      setAuthForm({ name: '', email: '', password: '' });
+    }
+  };
+
+  const handleModeSwitch = () => {
+    setAuthMode((mode) => (mode === 'login' ? 'register' : 'login'));
+    setAuthForm({ name: '', email: '', password: '' });
+    clearError();
+  };
+
+  const handleCreateTrainee = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    clearError();
+    setCreationFeedback(undefined);
+    setIsCreatingTrainee(true);
+    const success = await createTrainee(newTraineeForm);
+    setIsCreatingTrainee(false);
+    if (success) {
+      setCreationFeedback('Apprenant créé avec succès.');
+      setNewTraineeForm({ name: '', email: '', password: '' });
+    }
+  };
+
+  const handleNewTraineeChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = event.target;
+    setNewTraineeForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleStartScenario = () => {
+    if (selectedScenarioId) {
+      startScenario(selectedScenarioId);
+    }
+  };
+
+  if (!auth) {
+    return (
+      <div className="min-h-screen bg-slate-100 p-6">
+        <div className="mx-auto flex max-w-xl flex-col gap-6">
+          <header className="text-center">
+            <p className="text-xs uppercase tracking-[0.35em] text-indigo-500">Simulation SSI</p>
+            <h1 className="mt-2 text-3xl font-bold text-slate-800">Console Formateur SSI</h1>
+            <p className="mt-2 text-sm text-slate-500">
+              Connectez-vous pour orchestrer les scénarios et suivre vos apprenants en temps réel.
+            </p>
+          </header>
+          <Card title={authMode === 'login' ? 'Connexion formateur' : 'Créer un compte formateur'}>
+            <form className="space-y-4" onSubmit={handleAuthSubmit}>
+              {authMode === 'register' && (
+                <div className="space-y-1">
+                  <label htmlFor="name" className="text-sm font-medium text-slate-600">
+                    Nom complet
+                  </label>
+                  <input
+                    id="name"
+                    name="name"
+                    type="text"
+                    required
+                    value={authForm.name}
+                    onChange={handleAuthInputChange}
+                    className="w-full rounded border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+                    placeholder="Camille Formateur"
+                  />
+                </div>
+              )}
+              <div className="space-y-1">
+                <label htmlFor="email" className="text-sm font-medium text-slate-600">
+                  Adresse email
+                </label>
+                <input
+                  id="email"
+                  name="email"
+                  type="email"
+                  required
+                  value={authForm.email}
+                  onChange={handleAuthInputChange}
+                  className="w-full rounded border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+                  placeholder="formateur@exemple.fr"
+                />
+              </div>
+              <div className="space-y-1">
+                <label htmlFor="password" className="text-sm font-medium text-slate-600">
+                  Mot de passe
+                </label>
+                <input
+                  id="password"
+                  name="password"
+                  type="password"
+                  required
+                  value={authForm.password}
+                  onChange={handleAuthInputChange}
+                  className="w-full rounded border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+                  placeholder="••••••••"
+                />
+              </div>
+              {authError && <p className="text-sm text-red-600">{authError}</p>}
+              <Button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-70"
+              >
+                {isSubmitting
+                  ? 'Veuillez patienter…'
+                  : authMode === 'login'
+                  ? 'Se connecter'
+                  : 'Créer mon compte'}
+              </Button>
+            </form>
+          </Card>
+          <div className="text-center text-sm text-slate-600">
+            {authMode === 'login' ? (
+              <span>
+                Nouveau sur la plateforme ?{' '}
+                <button className="font-semibold text-indigo-600" type="button" onClick={handleModeSwitch}>
+                  Créer un compte
+                </button>
+              </span>
+            ) : (
+              <span>
+                Déjà inscrit ?{' '}
+                <button className="font-semibold text-indigo-600" type="button" onClick={handleModeSwitch}>
+                  Se connecter
+                </button>
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-100 pb-12">
@@ -1328,11 +1552,23 @@ const App = () => {
             <div className="flex flex-col items-start gap-4 lg:items-end">
               <ConnectionBadge status={connectionStatus} />
               <div className="flex flex-wrap items-center gap-2">
-                <SessionChip label="Session" value={session?.id ?? sessionId} />
+                <SessionChip label="Session" value={session?.id ?? sessionId ?? '—'} />
                 <SessionChip label="Run" value={session?.runId ?? '—'} />
-                <SessionChip label="Formateur" value={trainerId} />
-                <SessionChip label="Apprenant" value={traineeId} />
+                <SessionChip label="Formateur" value={auth.user.name} />
+                <SessionChip label="Apprenant" value={selectedTrainee?.name ?? '—'} />
                 <SessionChip label="Scénario" value={scenario?.name ?? 'En attente'} />
+              </div>
+              <div className="flex items-center gap-3">
+                <Button
+                  className="bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-70"
+                  disabled={!canLaunchScenario}
+                  onClick={handleStartScenario}
+                >
+                  Lancer le scénario sélectionné
+                </Button>
+                <Button className="bg-slate-200 text-slate-800 hover:bg-slate-300" onClick={logout}>
+                  Se déconnecter
+                </Button>
               </div>
             </div>
           </div>
@@ -1340,10 +1576,76 @@ const App = () => {
 
         <div className="grid gap-6 lg:grid-cols-[320px,1fr]">
           <aside className="space-y-4">
+            <TraineeSelector
+              trainees={trainees}
+              selectedTraineeId={selectedTraineeId}
+              onSelect={(id) => {
+                setSelectedScenarioId(undefined);
+                selectTrainee(id);
+              }}
+            />
+            <Card title="Créer un apprenant">
+              <form className="space-y-3" onSubmit={handleCreateTrainee}>
+                <div className="space-y-1">
+                  <label htmlFor="trainee-name" className="text-xs font-semibold uppercase text-slate-500">
+                    Nom complet
+                  </label>
+                  <input
+                    id="trainee-name"
+                    name="name"
+                    type="text"
+                    required
+                    value={newTraineeForm.name}
+                    onChange={handleNewTraineeChange}
+                    className="w-full rounded border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+                    placeholder="Alex Apprenant"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="trainee-email" className="text-xs font-semibold uppercase text-slate-500">
+                    Email
+                  </label>
+                  <input
+                    id="trainee-email"
+                    name="email"
+                    type="email"
+                    required
+                    value={newTraineeForm.email}
+                    onChange={handleNewTraineeChange}
+                    className="w-full rounded border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+                    placeholder="apprenant@exemple.fr"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="trainee-password" className="text-xs font-semibold uppercase text-slate-500">
+                    Mot de passe
+                  </label>
+                  <input
+                    id="trainee-password"
+                    name="password"
+                    type="password"
+                    required
+                    value={newTraineeForm.password}
+                    onChange={handleNewTraineeChange}
+                    className="w-full rounded border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+                    placeholder="••••••••"
+                  />
+                </div>
+                {creationFeedback && <p className="text-xs text-emerald-600">{creationFeedback}</p>}
+                {authError && !creationFeedback && <p className="text-xs text-red-600">{authError}</p>}
+                <Button
+                  type="submit"
+                  disabled={isCreatingTrainee}
+                  className="w-full bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-70"
+                >
+                  {isCreatingTrainee ? 'Création…' : 'Ajouter l\'apprenant'}
+                </Button>
+              </form>
+            </Card>
             <ScenarioSelector
               scenarios={scenarios}
-              selectedScenarioId={scenario?.id ?? session?.scenarioId}
-              onSelect={startScenario}
+              selectedScenarioId={activeScenarioId}
+              onSelect={setSelectedScenarioId}
             />
             <SessionOverview scenario={scenario} />
             <ScorePanel />

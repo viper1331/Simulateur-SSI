@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import { useSessionStore } from './store';
 import { Button, Card, Indicator } from '@ssi/ui-kit';
 import { cmsiMachine } from '@ssi/state-machines';
@@ -614,6 +614,26 @@ const App = () => {
   const session = useSessionStore((state) => state.session);
   const scenarios = useSessionStore((state) => state.scenarios);
   const setOutOfService = useSessionStore((state) => state.setOutOfService);
+  const connectionStatus = useSessionStore((state) => state.connectionStatus);
+  const connect = useSessionStore((state) => state.connect);
+  const auth = useSessionStore((state) => state.auth);
+  const authError = useSessionStore((state) => state.authError);
+  const login = useSessionStore((state) => state.login);
+  const register = useSessionStore((state) => state.register);
+  const logout = useSessionStore((state) => state.logout);
+  const clearError = useSessionStore((state) => state.clearError);
+  const sessionId = useSessionStore((state) => state.sessionId);
+  const [accessLevel, setAccessLevel] = useState<AccessLevel>(0);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [formState, setFormState] = useState({ name: '', email: '', password: '' });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (auth && connectionStatus === 'idle') {
+      void connect();
+    }
+  }, [auth, connectionStatus, connect]);
+
   const scenario = useMemo(() => {
     if (!session?.scenarioId) return undefined;
     return scenarios.find((item) => item.id === session.scenarioId);
@@ -630,12 +650,157 @@ const App = () => {
     setOutOfService({ targetType, targetId, active, label });
   };
 
+  const handleAuthSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsSubmitting(true);
+    const success =
+      authMode === 'login'
+        ? await login({ email: formState.email, password: formState.password })
+        : await register({ name: formState.name, email: formState.email, password: formState.password });
+    setIsSubmitting(false);
+    if (success) {
+      setFormState({ name: '', email: '', password: '' });
+    }
+  };
+
+  const handleInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = event.target;
+    setFormState((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleModeSwitch = () => {
+    setAuthMode((mode) => (mode === 'login' ? 'register' : 'login'));
+    setFormState({ name: '', email: '', password: '' });
+    clearError();
+  };
+
+  const connectionTone: 'ok' | 'warning' | 'danger' =
+    connectionStatus === 'connected' ? 'ok' : connectionStatus === 'error' ? 'danger' : 'warning';
+  const connectionLabel =
+    connectionStatus === 'connected'
+      ? 'Serveur connecté'
+      : connectionStatus === 'error'
+      ? 'Serveur déconnecté'
+      : connectionStatus === 'connecting'
+      ? 'Connexion en cours'
+      : 'En attente de connexion';
+
+  if (!auth) {
+    return (
+      <div className="min-h-screen bg-slate-100 p-6">
+        <div className="mx-auto flex max-w-xl flex-col gap-6">
+          <header className="text-center">
+            <h1 className="text-3xl font-bold text-slate-800">Poste Apprenant CMSI</h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Version {__APP_VERSION__} – connectez-vous pour suivre votre session personnalisée.
+            </p>
+          </header>
+          <Card title={authMode === 'login' ? 'Connexion apprenant' : 'Créer un compte apprenant'}>
+            <form className="space-y-4" onSubmit={handleAuthSubmit}>
+              {authMode === 'register' && (
+                <div className="space-y-1">
+                  <label htmlFor="name" className="text-sm font-medium text-slate-600">
+                    Nom complet
+                  </label>
+                  <input
+                    id="name"
+                    name="name"
+                    type="text"
+                    required
+                    value={formState.name}
+                    onChange={handleInputChange}
+                    className="w-full rounded border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+                    placeholder="Jean Dupont"
+                  />
+                </div>
+              )}
+              <div className="space-y-1">
+                <label htmlFor="email" className="text-sm font-medium text-slate-600">
+                  Adresse email
+                </label>
+                <input
+                  id="email"
+                  name="email"
+                  type="email"
+                  required
+                  value={formState.email}
+                  onChange={handleInputChange}
+                  className="w-full rounded border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+                  placeholder="vous@exemple.fr"
+                />
+              </div>
+              <div className="space-y-1">
+                <label htmlFor="password" className="text-sm font-medium text-slate-600">
+                  Mot de passe
+                </label>
+                <input
+                  id="password"
+                  name="password"
+                  type="password"
+                  required
+                  value={formState.password}
+                  onChange={handleInputChange}
+                  className="w-full rounded border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+                  placeholder="••••••••"
+                />
+              </div>
+              {authError && <p className="text-sm text-red-600">{authError}</p>}
+              <Button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-70"
+              >
+                {isSubmitting
+                  ? 'Veuillez patienter…'
+                  : authMode === 'login'
+                  ? 'Se connecter'
+                  : 'Créer mon compte'}
+              </Button>
+            </form>
+          </Card>
+          <div className="text-center text-sm text-slate-600">
+            {authMode === 'login' ? (
+              <span>
+                Pas encore inscrit ?{' '}
+                <button className="font-semibold text-indigo-600" type="button" onClick={handleModeSwitch}>
+                  Créer un compte
+                </button>
+              </span>
+            ) : (
+              <span>
+                Déjà inscrit ?{' '}
+                <button className="font-semibold text-indigo-600" type="button" onClick={handleModeSwitch}>
+                  Se connecter
+                </button>
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-100 p-6">
       <div className="mx-auto max-w-6xl space-y-6">
-        <header>
-          <h1 className="text-3xl font-bold text-slate-800">Poste Apprenant CMSI</h1>
-          <p className="text-slate-500">Version {__APP_VERSION__} – entraînez-vous à l'exploitation d'un SSI de catégorie A.</p>
+        <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-800">Poste Apprenant CMSI</h1>
+            <p className="text-slate-500">
+              Version {__APP_VERSION__} – entraînez-vous à l'exploitation d'un SSI de catégorie A.
+            </p>
+          </div>
+          <div className="flex flex-col items-start gap-3 text-sm text-slate-600 md:items-end">
+            <Indicator label={connectionLabel} tone={connectionTone} active />
+            <div className="text-right">
+              <div className="font-semibold text-slate-700">{auth.user.name}</div>
+              <div className="text-xs text-slate-500">{auth.user.email}</div>
+              {sessionId && <div className="text-xs text-slate-400">Session : {sessionId}</div>}
+            </div>
+            <Button className="bg-slate-200 text-slate-700 hover:bg-slate-300" onClick={logout}>
+              Se déconnecter
+            </Button>
+          </div>
         </header>
         <AccessLevelStatus accessLevel={accessLevel} />
         <CmsiFacade accessLevel={accessLevel} onToggleOutOfService={handleOutOfServiceToggle} />
@@ -644,6 +809,11 @@ const App = () => {
           <ActionChecklist session={session} />
         </div>
         <Dashboard scenario={scenario} />
+        {session?.trainerId && (
+          <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">
+            Formateur connecté : <span className="font-semibold text-slate-700">{session.trainerId}</span>
+          </div>
+        )}
         <Buzzer active={session?.ugaActive ?? false} />
       </div>
     </div>

@@ -65,6 +65,19 @@ export type DetectionPeripheral = z.infer<typeof detectionPeripheralSchema>;
 export type ScenarioEvent = z.infer<typeof scenarioEventSchema>;
 export type Scenario = z.infer<typeof scenarioSchema>;
 
+export const userRoleSchema = z.enum(['TRAINER', 'TRAINEE']);
+
+export const userSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  email: z.string().email(),
+  role: userRoleSchema,
+  createdAt: z.string().optional()
+});
+
+export type UserRole = z.infer<typeof userRoleSchema>;
+export type User = z.infer<typeof userSchema>;
+
 export interface TrainingRunSummary {
   id: string;
   scenarioId: string;
