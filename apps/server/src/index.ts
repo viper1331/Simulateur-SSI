@@ -48,6 +48,7 @@ interface SessionState {
   awaitingReset: boolean;
   alarmStartedAt?: number;
   ackTimestamp?: number;
+  outOfService: { zd: string[]; das: string[] };
 }
 
 interface Session {
@@ -66,6 +67,15 @@ type ClientMessage =
   | { type: 'ACK'; sessionId: string; userId: string }
   | { type: 'RESET'; sessionId: string; userId: string }
   | { type: 'UGA_STOP'; sessionId: string; userId: string }
+  | {
+      type: 'SET_OUT_OF_SERVICE';
+      sessionId: string;
+      userId: string;
+      targetType: 'zd' | 'das';
+      targetId: string;
+      active: boolean;
+      label?: string;
+    }
   | { type: 'STOP_SCENARIO'; sessionId: string };
 
 type ServerMessage =
@@ -198,7 +208,8 @@ const ensureSession = (sessionId: string): Session => {
         dasStatus: {},
         timeline: [],
         score: 0,
-        awaitingReset: false
+        awaitingReset: false,
+        outOfService: { zd: [], das: [] }
       }
     };
     sessions.set(sessionId, session);
@@ -316,7 +327,8 @@ const handleMessage = async (ws: WebSocket, message: ClientMessage) => {
         awaitingReset: false,
         alarmStartedAt: undefined,
         ackTimestamp: undefined,
-        id: session.state.id
+        id: session.state.id,
+        outOfService: { zd: [], das: [] }
       };
       addTimeline(session, `Scénario "${scenario.name}" démarré`, 'system');
       const run = await prisma.run.create({
@@ -369,6 +381,34 @@ const handleMessage = async (ws: WebSocket, message: ClientMessage) => {
       addTimeline(session, 'Arrêt UGA manuel', 'action');
       await persistAction(session, 'UGA_STOP', { userId: message.userId });
       await updateScore(session, 'Arrêt UGA prématuré', -25);
+      broadcast(session);
+      break;
+    }
+    case 'SET_OUT_OF_SERVICE': {
+      const session = ensureSession(message.sessionId);
+      const { targetType, targetId, active, label } = message;
+      const current = session.state.outOfService[targetType] ?? [];
+      const updated = active
+        ? Array.from(new Set([...current, targetId]))
+        : current.filter((id) => id !== targetId);
+      session.state.outOfService = {
+        ...session.state.outOfService,
+        [targetType]: updated
+      };
+      const name = label ?? targetId;
+      const actionLabel = targetType === 'zd' ? 'Zone' : 'DAS';
+      addTimeline(
+        session,
+        `${actionLabel} ${active ? 'mise hors service' : 'remise en service'} (${name})`,
+        'action'
+      );
+      await persistAction(session, 'SET_OUT_OF_SERVICE', {
+        targetType,
+        targetId,
+        active,
+        label,
+        userId: message.userId
+      });
       broadcast(session);
       break;
     }
