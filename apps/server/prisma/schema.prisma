@@ -18,7 +18,7 @@ model Scenario {
   id          String   @id
   name        String
   description String
-  config      Json
+  config      String
   events      Event[]
   createdAt   DateTime @default(now())
   runs        Run[]
@@ -29,7 +29,7 @@ model Event {
   scenario   Scenario @relation(fields: [scenarioId], references: [id])
   scenarioId String
   type       String
-  payload    Json
+  payload    String
   offset     Int
   createdAt  DateTime @default(now())
 }
@@ -53,7 +53,7 @@ model Action {
   run       Run      @relation(fields: [runId], references: [id])
   runId     String
   type      String
-  payload   Json
+  payload   String
   createdAt DateTime @default(now())
 }
 
