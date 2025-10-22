@@ -37,6 +37,14 @@ export const scenarioEventSchema = z.object({
   payload: z.record(z.any())
 });
 
+export const detectionPeripheralSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  type: z.enum(['dm', 'dai', 'detecteur_chaleur', 'detecteur_fumee', 'autre']),
+  zoneId: z.string(),
+  description: z.string().optional()
+});
+
 export const scenarioSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -46,12 +54,14 @@ export const scenarioSchema = z.object({
   zd: z.array(zdSchema),
   zf: z.array(zfSchema),
   das: z.array(dasSchema),
+  peripherals: z.array(detectionPeripheralSchema).default([]),
   events: z.array(scenarioEventSchema)
 });
 
 export type Zd = z.infer<typeof zdSchema>;
 export type Zf = z.infer<typeof zfSchema>;
 export type Das = z.infer<typeof dasSchema>;
+export type DetectionPeripheral = z.infer<typeof detectionPeripheralSchema>;
 export type ScenarioEvent = z.infer<typeof scenarioEventSchema>;
 export type Scenario = z.infer<typeof scenarioSchema>;
 
@@ -96,6 +106,10 @@ export const defaultScenarios: Scenario[] = [
     das: [
       { id: 'das-portes', name: 'Portes coupe-feu', type: 'compartimentage', zoneId: 'zf-evac', status: 'en_position' }
     ],
+    peripherals: [
+      { id: 'periph-dm-accueil', name: 'DM accueil', type: 'dm', zoneId: 'zd-1', description: 'Déclencheur manuel principal' },
+      { id: 'periph-dai-accueil', name: 'DAI accueil', type: 'dai', zoneId: 'zd-1', description: 'Détecteur automatique du hall' }
+    ],
     events: [
       { id: 'event-1', scenarioId: 'scenario-1', timestamp: 0, type: 'ALARME_DM', payload: { zdId: 'zd-1' } }
     ]
@@ -114,6 +128,10 @@ export const defaultScenarios: Scenario[] = [
     ],
     das: [
       { id: 'das-volet', name: 'Volet désenfumage', type: 'desenfumage', zoneId: 'zf-des', status: 'commande' }
+    ],
+    peripherals: [
+      { id: 'periph-dai-atelier', name: 'DAI Atelier', type: 'dai', zoneId: 'zd-2' },
+      { id: 'periph-dm-atelier', name: 'DM Atelier', type: 'dm', zoneId: 'zd-2' }
     ],
     events: [
       { id: 'event-2', scenarioId: 'scenario-2', timestamp: 0, type: 'ALARME_DAI', payload: { zdId: 'zd-2' } },
@@ -134,6 +152,9 @@ export const defaultScenarios: Scenario[] = [
     ],
     das: [
       { id: 'das-vent', name: 'Ventilation', type: 'technique', zoneId: 'zf-tech', status: 'en_position' }
+    ],
+    peripherals: [
+      { id: 'periph-detecteur-tech', name: 'Détecteur chaleur local technique', type: 'detecteur_chaleur', zoneId: 'zd-3' }
     ],
     events: [
       { id: 'event-4', scenarioId: 'scenario-3', timestamp: 0, type: 'COUPURE_SECTEUR', payload: {} }

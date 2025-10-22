@@ -1,10 +1,33 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Card, Indicator } from '@ssi/ui-kit';
 import { useTrainerStore } from './store';
-import type { Scenario } from '@ssi/shared-models';
+import type { Scenario, ScenarioEvent } from '@ssi/shared-models';
 import { initialScoreRules } from '@ssi/shared-models';
 
 type ActiveAlarms = { dm: string[]; dai: string[] };
+
+const createId = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
+
+const cloneScenario = (scenario: Scenario): Scenario => ({
+  ...scenario,
+  zd: scenario.zd.map((zone) => ({ ...zone, linkedZoneIds: [...zone.linkedZoneIds] })),
+  zf: scenario.zf.map((zone) => ({ ...zone, dasIds: [...zone.dasIds] })),
+  das: scenario.das.map((das) => ({ ...das })),
+  peripherals: (scenario.peripherals ?? []).map((peripheral) => ({ ...peripheral })),
+  events: scenario.events.map((event) => ({ ...event, payload: { ...event.payload } }))
+});
+
+const synchronizeZfWithDas = (dasList: Scenario['das'], zfList: Scenario['zf']): Scenario['zf'] => {
+  const assignments = new Map<string, string[]>();
+  zfList.forEach((zone) => assignments.set(zone.id, []));
+  dasList.forEach((device) => {
+    const list = assignments.get(device.zoneId);
+    if (list) {
+      list.push(device.id);
+    }
+  });
+  return zfList.map((zone) => ({ ...zone, dasIds: assignments.get(zone.id) ?? [] }));
+};
 
 const formatDuration = (seconds?: number) => {
   if (seconds === undefined) return '--';
@@ -411,6 +434,9 @@ const ScenarioDetails = ({ scenario }: { scenario?: Scenario }) => {
           <div>
             <span className="font-semibold text-slate-600">DAS pilotés</span> : {scenario.das.length}
           </div>
+          <div>
+            <span className="font-semibold text-slate-600">Périphériques</span> : {scenario.peripherals.length}
+          </div>
         </div>
         <div>
           <h4 className="text-xs font-semibold uppercase text-slate-500">Événements planifiés</h4>
@@ -428,6 +454,27 @@ const ScenarioDetails = ({ scenario }: { scenario?: Scenario }) => {
             </ul>
           ) : (
             <p className="mt-2 text-xs text-slate-500">Aucun événement préprogrammé pour ce scénario.</p>
+          )}
+        </div>
+        <div>
+          <h4 className="text-xs font-semibold uppercase text-slate-500">Détection configurée</h4>
+          {scenario.peripherals.length > 0 ? (
+            <ul className="mt-2 space-y-1">
+              {scenario.peripherals.map((peripheral) => {
+                const zoneLabel = scenario.zd.find((zone) => zone.id === peripheral.zoneId)?.name ?? peripheral.zoneId;
+                const typeLabel = peripheral.type.replace(/_/g, ' ').toUpperCase();
+                return (
+                  <li key={peripheral.id} className="flex flex-wrap items-center justify-between gap-2 rounded bg-white px-2 py-1">
+                    <span className="text-xs font-semibold text-slate-600">{peripheral.name}</span>
+                    <span className="text-[0.7rem] uppercase tracking-wide text-slate-500">
+                      {typeLabel} · {zoneLabel}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <p className="mt-2 text-xs text-slate-500">Ajoutez des DM, DAI ou capteurs pour enrichir le scénario.</p>
           )}
         </div>
       </div>
@@ -505,61 +552,665 @@ const TrainerControls = ({ scenario }: { scenario?: Scenario }) => {
 };
 
 const ScenarioEditor = ({ scenario, onUpdate }: { scenario?: Scenario; onUpdate: (updated: Scenario) => void }) => {
-  const [t1, setT1] = useState(scenario?.t1 ?? 15);
-  const [t2, setT2] = useState(scenario?.t2 ?? 5);
+  const [draft, setDraft] = useState<Scenario | undefined>(scenario ? cloneScenario(scenario) : undefined);
 
   useEffect(() => {
-    if (scenario) {
-      setT1(scenario.t1);
-      setT2(scenario.t2);
-    }
+    setDraft(scenario ? cloneScenario(scenario) : undefined);
   }, [scenario]);
+
+  if (!scenario || !draft) {
+    return (
+      <Card title="Paramètres de scénario">
+        <p className="text-sm text-slate-500">Sélectionnez un scénario pour l'éditer.</p>
+      </Card>
+    );
+  }
+
+  const readPayloadString = (payload: Record<string, unknown>, key: string) => {
+    const value = payload?.[key];
+    return typeof value === 'string' ? (value as string) : undefined;
+  };
+
+  const handleDraftUpdate = (next: Scenario) => {
+    const synchronized = {
+      ...next,
+      zf: synchronizeZfWithDas(next.das, next.zf)
+    };
+    setDraft(cloneScenario(synchronized));
+    onUpdate(synchronized);
+  };
+
+  const updateScenarioValues = (updates: Partial<Scenario>) => {
+    handleDraftUpdate({ ...draft, ...updates });
+  };
+
+  const addZone = () => {
+    const newZone = { id: createId('zd'), name: 'Nouvelle zone', description: '', linkedZoneIds: [] as string[] };
+    handleDraftUpdate({ ...draft, zd: [...draft.zd, newZone] });
+  };
+
+  const removeZone = (zoneId: string) => {
+    const removedPeripheralIds = new Set(
+      draft.peripherals.filter((peripheral) => peripheral.zoneId === zoneId).map((peripheral) => peripheral.id)
+    );
+    const filteredEvents = draft.events.filter((event) => {
+      const zonePayload = readPayloadString(event.payload, 'zdId');
+      const peripheralPayload = readPayloadString(event.payload, 'peripheralId');
+      if (zonePayload && zonePayload === zoneId) return false;
+      if (peripheralPayload && removedPeripheralIds.has(peripheralPayload)) return false;
+      return true;
+    });
+    handleDraftUpdate({
+      ...draft,
+      zd: draft.zd.filter((zone) => zone.id !== zoneId),
+      peripherals: draft.peripherals.filter((peripheral) => peripheral.zoneId !== zoneId),
+      events: filteredEvents
+    });
+  };
+
+  const updateZone = (zoneId: string, updates: Partial<(typeof draft.zd)[number]>) => {
+    handleDraftUpdate({
+      ...draft,
+      zd: draft.zd.map((zone) => (zone.id === zoneId ? { ...zone, ...updates } : zone))
+    });
+  };
+
+  const toggleLinkedZone = (zoneId: string, linkedId: string) => {
+    const zone = draft.zd.find((item) => item.id === zoneId);
+    if (!zone) return;
+    const links = new Set(zone.linkedZoneIds);
+    if (links.has(linkedId)) {
+      links.delete(linkedId);
+    } else {
+      links.add(linkedId);
+    }
+    updateZone(zoneId, { linkedZoneIds: Array.from(links) });
+  };
+
+  const addZf = () => {
+    const newZf = { id: createId('zf'), name: 'Nouvelle zone mise en sécurité', dasIds: [] as string[], ugaChannel: '' };
+    handleDraftUpdate({ ...draft, zf: [...draft.zf, newZf] });
+  };
+
+  const removeZf = (zfId: string) => {
+    const filteredDas = draft.das.filter((das) => das.zoneId !== zfId);
+    const removedDasIds = new Set(draft.das.filter((das) => das.zoneId === zfId).map((das) => das.id));
+    const filteredEvents = draft.events.filter((event) => {
+      const targetDas = readPayloadString(event.payload, 'dasId');
+      if (targetDas && removedDasIds.has(targetDas)) return false;
+      return true;
+    });
+    handleDraftUpdate({
+      ...draft,
+      zf: draft.zf.filter((zone) => zone.id !== zfId),
+      zd: draft.zd.map((zone) => ({
+        ...zone,
+        linkedZoneIds: zone.linkedZoneIds.filter((linkId) => linkId !== zfId)
+      })),
+      das: filteredDas,
+      events: filteredEvents
+    });
+  };
+
+  const updateZf = (zfId: string, updates: Partial<(typeof draft.zf)[number]>) => {
+    handleDraftUpdate({
+      ...draft,
+      zf: draft.zf.map((zone) => (zone.id === zfId ? { ...zone, ...updates } : zone))
+    });
+  };
+
+  const addDas = () => {
+    const targetZone = draft.zf[0]?.id ?? '';
+    const newDas = {
+      id: createId('das'),
+      name: 'Nouveau DAS',
+      type: 'compartimentage' as (typeof draft.das)[number]['type'],
+      zoneId: targetZone,
+      status: 'en_position' as (typeof draft.das)[number]['status']
+    };
+    handleDraftUpdate({ ...draft, das: [...draft.das, newDas] });
+  };
+
+  const removeDas = (dasId: string) => {
+    const filteredDas = draft.das.filter((das) => das.id !== dasId);
+    const filteredEvents = draft.events.filter((event) => {
+      const targetDas = readPayloadString(event.payload, 'dasId');
+      if (targetDas && targetDas === dasId) return false;
+      return true;
+    });
+    handleDraftUpdate({
+      ...draft,
+      das: filteredDas,
+      events: filteredEvents
+    });
+  };
+
+  const updateDas = (dasId: string, updates: Partial<(typeof draft.das)[number]>) => {
+    const updatedDas = draft.das.map((das) => (das.id === dasId ? { ...das, ...updates } : das));
+    handleDraftUpdate({
+      ...draft,
+      das: updatedDas
+    });
+  };
+
+  const addPeripheral = () => {
+    const targetZone = draft.zd[0]?.id ?? '';
+    const newPeripheral = {
+      id: createId('periph'),
+      name: 'Nouveau périphérique',
+      type: 'dm' as (typeof draft.peripherals)[number]['type'],
+      zoneId: targetZone,
+      description: ''
+    };
+    handleDraftUpdate({ ...draft, peripherals: [...draft.peripherals, newPeripheral] });
+  };
+
+  const removePeripheral = (peripheralId: string) => {
+    const filteredEvents = draft.events.filter((event) => {
+      const targetPeripheral = readPayloadString(event.payload, 'peripheralId');
+      if (targetPeripheral && targetPeripheral === peripheralId) return false;
+      return true;
+    });
+    handleDraftUpdate({
+      ...draft,
+      peripherals: draft.peripherals.filter((peripheral) => peripheral.id !== peripheralId),
+      events: filteredEvents
+    });
+  };
+
+  const updatePeripheral = (peripheralId: string, updates: Partial<(typeof draft.peripherals)[number]>) => {
+    handleDraftUpdate({
+      ...draft,
+      peripherals: draft.peripherals.map((peripheral) => (peripheral.id === peripheralId ? { ...peripheral, ...updates } : peripheral))
+    });
+  };
+
+  const addEvent = () => {
+    const newEvent: ScenarioEvent = {
+      id: createId('event'),
+      scenarioId: draft.id,
+      timestamp: Math.max(0, ...draft.events.map((event) => event.timestamp)) + 5,
+      type: 'ALARME_DM',
+      payload: {}
+    };
+    handleDraftUpdate({ ...draft, events: [...draft.events, newEvent] });
+  };
+
+  const removeEvent = (eventId: string) => {
+    handleDraftUpdate({ ...draft, events: draft.events.filter((event) => event.id !== eventId) });
+  };
+
+  const updateEvent = (eventId: string, updates: Partial<ScenarioEvent>) => {
+    handleDraftUpdate({
+      ...draft,
+      events: draft.events.map((event) => (event.id === eventId ? { ...event, ...updates } : event))
+    });
+  };
+
+  const updateEventPayload = (
+    eventId: string,
+    updater: (payload: Record<string, unknown>) => Record<string, unknown>
+  ) => {
+    const current = draft.events.find((event) => event.id === eventId);
+    if (!current) return;
+    const nextPayload = updater(current.payload ?? {});
+    handleDraftUpdate({
+      ...draft,
+      events: draft.events.map((event) => (event.id === eventId ? { ...event, payload: nextPayload } : event))
+    });
+  };
+
+  const dmPeripherals = draft.peripherals.filter((peripheral) => peripheral.type === 'dm');
+  const daiPeripherals = draft.peripherals.filter((peripheral) =>
+    ['dai', 'detecteur_fumee', 'detecteur_chaleur'].includes(peripheral.type)
+  );
 
   return (
     <Card title="Paramètres de scénario">
-      {scenario ? (
-        <div className="space-y-4">
-          <div>
-            <label className="text-xs font-semibold uppercase text-slate-500">Temporisation T1</label>
+      <div className="space-y-6 text-sm text-slate-600">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-semibold uppercase text-slate-500">Temporisation T1</span>
             <input
               type="number"
-              min={5}
-              className="mt-1 w-full rounded border border-slate-300 px-3 py-2"
-              value={t1}
-              onChange={(event) => {
-                const newValue = Number(event.target.value);
-                setT1(newValue);
-                onUpdate({ ...scenario, t1: newValue });
-              }}
+              min={0}
+              className="w-full rounded border border-slate-300 px-3 py-2"
+              value={draft.t1}
+              onChange={(event) => updateScenarioValues({ t1: Number(event.target.value) })}
             />
-          </div>
-          <div>
-            <label className="text-xs font-semibold uppercase text-slate-500">Temporisation T2</label>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-semibold uppercase text-slate-500">Temporisation T2</span>
             <input
               type="number"
-              min={3}
-              className="mt-1 w-full rounded border border-slate-300 px-3 py-2"
-              value={t2}
-              onChange={(event) => {
-                const newValue = Number(event.target.value);
-                setT2(newValue);
-                onUpdate({ ...scenario, t2: newValue });
-              }}
+              min={0}
+              className="w-full rounded border border-slate-300 px-3 py-2"
+              value={draft.t2}
+              onChange={(event) => updateScenarioValues({ t2: Number(event.target.value) })}
             />
-          </div>
-          <p className="text-xs text-slate-500">
-            La console met automatiquement à jour la logique d'asservissement ZD → ZF → DAS.
-          </p>
+          </label>
         </div>
-      ) : (
-        <p className="text-sm text-slate-500">Sélectionnez un scénario pour l'éditer.</p>
-      )}
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-semibold uppercase text-slate-500">Zones de détection</h4>
+            <Button type="button" onClick={addZone} className="bg-indigo-600 text-white hover:bg-indigo-700">
+              Ajouter une zone
+            </Button>
+          </div>
+          {draft.zd.length === 0 && <p className="text-xs text-slate-500">Aucune zone configurée.</p>}
+          <div className="space-y-3">
+            {draft.zd.map((zone) => (
+              <div key={zone.id} className="rounded-lg border border-slate-200 bg-white/70 p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span className="font-semibold uppercase">{zone.name}</span>
+                    <span className="rounded bg-slate-200 px-2 py-0.5 font-semibold text-slate-600">{zone.id}</span>
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={() => removeZone(zone.id)}
+                    className="self-start bg-rose-100 text-rose-700 hover:bg-rose-200"
+                  >
+                    Supprimer
+                  </Button>
+                </div>
+                <label className="mt-3 flex flex-col gap-1">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Nom affiché</span>
+                  <input
+                    className="w-full rounded border border-slate-300 px-3 py-2"
+                    value={zone.name}
+                    onChange={(event) => updateZone(zone.id, { name: event.target.value })}
+                  />
+                </label>
+                <label className="mt-3 flex flex-col gap-1">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Description</span>
+                  <textarea
+                    className="min-h-[80px] w-full rounded border border-slate-300 px-3 py-2"
+                    value={zone.description ?? ''}
+                    onChange={(event) => updateZone(zone.id, { description: event.target.value })}
+                  />
+                </label>
+                <div className="mt-3">
+                  <span className="text-xs font-semibold uppercase text-slate-500">
+                    Zones de mise en sécurité associées
+                  </span>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {draft.zf.map((zf) => {
+                      const checked = zone.linkedZoneIds.includes(zf.id);
+                      return (
+                        <label key={`${zone.id}-${zf.id}`} className="flex items-center gap-2 rounded bg-slate-100 px-2 py-1">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4"
+                            checked={checked}
+                            onChange={() => toggleLinkedZone(zone.id, zf.id)}
+                          />
+                          <span className="text-xs text-slate-600">{zf.name}</span>
+                        </label>
+                      );
+                    })}
+                    {draft.zf.length === 0 && <span className="text-xs text-slate-400">Aucune ZF disponible</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-semibold uppercase text-slate-500">Zones de mise en sécurité (ZF)</h4>
+            <Button type="button" onClick={addZf} className="bg-indigo-600 text-white hover:bg-indigo-700">
+              Ajouter une ZF
+            </Button>
+          </div>
+          {draft.zf.length === 0 && <p className="text-xs text-slate-500">Aucune ZF configurée.</p>}
+          <div className="space-y-3">
+            {draft.zf.map((zf) => (
+              <div key={zf.id} className="rounded-lg border border-slate-200 bg-white/70 p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span className="font-semibold uppercase">{zf.name}</span>
+                    <span className="rounded bg-slate-200 px-2 py-0.5 font-semibold text-slate-600">{zf.id}</span>
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={() => removeZf(zf.id)}
+                    className="self-start bg-rose-100 text-rose-700 hover:bg-rose-200"
+                  >
+                    Supprimer
+                  </Button>
+                </div>
+                <label className="mt-3 flex flex-col gap-1">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Nom affiché</span>
+                  <input
+                    className="w-full rounded border border-slate-300 px-3 py-2"
+                    value={zf.name}
+                    onChange={(event) => updateZf(zf.id, { name: event.target.value })}
+                  />
+                </label>
+                <label className="mt-3 flex flex-col gap-1">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Canal UGA (optionnel)</span>
+                  <input
+                    className="w-full rounded border border-slate-300 px-3 py-2"
+                    value={zf.ugaChannel ?? ''}
+                    onChange={(event) => updateZf(zf.id, { ugaChannel: event.target.value || undefined })}
+                  />
+                </label>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-semibold uppercase text-slate-500">Dispositifs actionnés de sécurité (DAS)</h4>
+            <Button type="button" onClick={addDas} className="bg-indigo-600 text-white hover:bg-indigo-700">
+              Ajouter un DAS
+            </Button>
+          </div>
+          {draft.das.length === 0 && <p className="text-xs text-slate-500">Aucun DAS configuré.</p>}
+          <div className="space-y-3">
+            {draft.das.map((das) => (
+              <div key={das.id} className="rounded-lg border border-slate-200 bg-white/70 p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span className="font-semibold uppercase">{das.name}</span>
+                    <span className="rounded bg-slate-200 px-2 py-0.5 font-semibold text-slate-600">{das.id}</span>
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={() => removeDas(das.id)}
+                    className="self-start bg-rose-100 text-rose-700 hover:bg-rose-200"
+                  >
+                    Supprimer
+                  </Button>
+                </div>
+                <label className="mt-3 flex flex-col gap-1">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Nom affiché</span>
+                  <input
+                    className="w-full rounded border border-slate-300 px-3 py-2"
+                    value={das.name}
+                    onChange={(event) => updateDas(das.id, { name: event.target.value })}
+                  />
+                </label>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-semibold uppercase text-slate-500">Type</span>
+                    <select
+                      className="w-full rounded border border-slate-300 px-3 py-2"
+                      value={das.type}
+                      onChange={(event) =>
+                        updateDas(das.id, {
+                          type: event.target.value as (typeof draft.das)[number]['type']
+                        })
+                      }
+                    >
+                      <option value="compartimentage">Compartimentage</option>
+                      <option value="desenfumage">Désenfumage</option>
+                      <option value="ventilation">Ventilation</option>
+                      <option value="evacuation">Évacuation</option>
+                      <option value="technique">Technique</option>
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-semibold uppercase text-slate-500">Statut initial</span>
+                    <select
+                      className="w-full rounded border border-slate-300 px-3 py-2"
+                      value={das.status}
+                      onChange={(event) =>
+                        updateDas(das.id, {
+                          status: event.target.value as (typeof draft.das)[number]['status']
+                        })
+                      }
+                    >
+                      <option value="en_position">En position</option>
+                      <option value="commande">Commandé</option>
+                      <option value="defaut">Défaut</option>
+                    </select>
+                  </label>
+                </div>
+                <label className="mt-3 flex flex-col gap-1">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Zone de mise en sécurité associée</span>
+                  <select
+                    className="w-full rounded border border-slate-300 px-3 py-2"
+                    value={das.zoneId}
+                    onChange={(event) => updateDas(das.id, { zoneId: event.target.value })}
+                  >
+                    <option value="">Non assigné</option>
+                    {draft.zf.map((zf) => (
+                      <option key={zf.id} value={zf.id}>
+                        {zf.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-semibold uppercase text-slate-500">Détection (DM, DAI, capteurs)</h4>
+            <Button type="button" onClick={addPeripheral} className="bg-indigo-600 text-white hover:bg-indigo-700">
+              Ajouter un périphérique
+            </Button>
+          </div>
+          {draft.peripherals.length === 0 && <p className="text-xs text-slate-500">Aucun périphérique configuré.</p>}
+          <div className="space-y-3">
+            {draft.peripherals.map((peripheral) => (
+              <div key={peripheral.id} className="rounded-lg border border-slate-200 bg-white/70 p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span className="font-semibold uppercase">{peripheral.name}</span>
+                    <span className="rounded bg-slate-200 px-2 py-0.5 font-semibold text-slate-600">{peripheral.id}</span>
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={() => removePeripheral(peripheral.id)}
+                    className="self-start bg-rose-100 text-rose-700 hover:bg-rose-200"
+                  >
+                    Supprimer
+                  </Button>
+                </div>
+                <label className="mt-3 flex flex-col gap-1">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Nom affiché</span>
+                  <input
+                    className="w-full rounded border border-slate-300 px-3 py-2"
+                    value={peripheral.name}
+                    onChange={(event) => updatePeripheral(peripheral.id, { name: event.target.value })}
+                  />
+                </label>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-semibold uppercase text-slate-500">Type</span>
+                    <select
+                      className="w-full rounded border border-slate-300 px-3 py-2"
+                      value={peripheral.type}
+                      onChange={(event) =>
+                        updatePeripheral(peripheral.id, {
+                          type: event.target.value as (typeof draft.peripherals)[number]['type']
+                        })
+                      }
+                    >
+                      <option value="dm">Déclencheur manuel</option>
+                      <option value="dai">Détecteur automatique</option>
+                      <option value="detecteur_fumee">Détecteur de fumée</option>
+                      <option value="detecteur_chaleur">Détecteur de chaleur</option>
+                      <option value="autre">Autre capteur</option>
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-semibold uppercase text-slate-500">Zone de détection</span>
+                    <select
+                      className="w-full rounded border border-slate-300 px-3 py-2"
+                      value={peripheral.zoneId}
+                      onChange={(event) => updatePeripheral(peripheral.id, { zoneId: event.target.value })}
+                    >
+                      <option value="">Non assigné</option>
+                      {draft.zd.map((zone) => (
+                        <option key={zone.id} value={zone.id}>
+                          {zone.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <label className="mt-3 flex flex-col gap-1">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Description (optionnelle)</span>
+                  <textarea
+                    className="min-h-[60px] w-full rounded border border-slate-300 px-3 py-2"
+                    value={peripheral.description ?? ''}
+                    onChange={(event) => updatePeripheral(peripheral.id, { description: event.target.value })}
+                  />
+                </label>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-semibold uppercase text-slate-500">Événements planifiés</h4>
+            <Button type="button" onClick={addEvent} className="bg-indigo-600 text-white hover:bg-indigo-700">
+              Ajouter un événement
+            </Button>
+          </div>
+          {draft.events.length === 0 && <p className="text-xs text-slate-500">Aucun événement programmé.</p>}
+          <div className="space-y-3">
+            {draft.events
+              .slice()
+              .sort((a, b) => a.timestamp - b.timestamp)
+              .map((event) => {
+                const payloadZoneId = readPayloadString(event.payload, 'zdId');
+                const payloadPeripheralId = readPayloadString(event.payload, 'peripheralId');
+                const payloadDasId = readPayloadString(event.payload, 'dasId');
+                return (
+                  <div key={event.id} className="rounded-lg border border-slate-200 bg-white/70 p-3">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <span className="font-semibold uppercase">{event.type}</span>
+                        <span className="rounded bg-slate-200 px-2 py-0.5 font-semibold text-slate-600">{event.id}</span>
+                      </div>
+                      <Button
+                        type="button"
+                        onClick={() => removeEvent(event.id)}
+                        className="self-start bg-rose-100 text-rose-700 hover:bg-rose-200"
+                      >
+                        Supprimer
+                      </Button>
+                    </div>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                      <label className="flex flex-col gap-1">
+                        <span className="text-xs font-semibold uppercase text-slate-500">Horodatage (s)</span>
+                        <input
+                          type="number"
+                          min={0}
+                          className="w-full rounded border border-slate-300 px-3 py-2"
+                          value={event.timestamp}
+                          onChange={(e) => updateEvent(event.id, { timestamp: Number(e.target.value) })}
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-xs font-semibold uppercase text-slate-500">Type</span>
+                        <select
+                          className="w-full rounded border border-slate-300 px-3 py-2"
+                          value={event.type}
+                          onChange={(e) => updateEvent(event.id, { type: e.target.value as ScenarioEvent['type'] })}
+                        >
+                          <option value="ALARME_DM">Alarme DM</option>
+                          <option value="ALARME_DAI">Alarme DAI</option>
+                          <option value="DEFAUT_LIGNE">Défaut ligne</option>
+                          <option value="COUPURE_SECTEUR">Coupure secteur</option>
+                          <option value="DAS_BLOQUE">Blocage DAS</option>
+                          <option value="UGA_HORS_SERVICE">UGA hors service</option>
+                        </select>
+                      </label>
+                      {(event.type === 'ALARME_DM' || event.type === 'ALARME_DAI') && (
+                        <label className="flex flex-col gap-1">
+                          <span className="text-xs font-semibold uppercase text-slate-500">Zone concernée</span>
+                          <select
+                            className="w-full rounded border border-slate-300 px-3 py-2"
+                            value={payloadZoneId ?? ''}
+                            onChange={(e) =>
+                              updateEventPayload(event.id, (payload) => ({
+                                ...payload,
+                                zdId: e.target.value || undefined
+                              }))
+                            }
+                          >
+                            <option value="">Non défini</option>
+                            {draft.zd.map((zone) => (
+                              <option key={zone.id} value={zone.id}>
+                                {zone.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      {event.type === 'DAS_BLOQUE' && (
+                        <label className="flex flex-col gap-1">
+                          <span className="text-xs font-semibold uppercase text-slate-500">DAS concerné</span>
+                          <select
+                            className="w-full rounded border border-slate-300 px-3 py-2"
+                            value={payloadDasId ?? ''}
+                            onChange={(e) =>
+                              updateEventPayload(event.id, (payload) => ({
+                                ...payload,
+                                dasId: e.target.value || undefined
+                              }))
+                            }
+                          >
+                            <option value="">Non défini</option>
+                            {draft.das.map((das) => (
+                              <option key={das.id} value={das.id}>
+                                {das.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                    </div>
+                    {(event.type === 'ALARME_DM' || event.type === 'ALARME_DAI') && (
+                      <label className="mt-3 flex flex-col gap-1">
+                        <span className="text-xs font-semibold uppercase text-slate-500">Périphérique déclencheur (optionnel)</span>
+                        <select
+                          className="w-full rounded border border-slate-300 px-3 py-2"
+                          value={payloadPeripheralId ?? ''}
+                          onChange={(e) =>
+                            updateEventPayload(event.id, (payload) => ({
+                              ...payload,
+                              peripheralId: e.target.value || undefined
+                            }))
+                          }
+                        >
+                          <option value="">Non défini</option>
+                          {(event.type === 'ALARME_DM' ? dmPeripherals : daiPeripherals).map((peripheral) => (
+                            <option key={peripheral.id} value={peripheral.id}>
+                              {peripheral.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+        </div>
+
+        <p className="text-xs text-slate-500">
+          La console synchronise automatiquement les liens ZD → ZF → DAS et propose les périphériques pour les événements.
+        </p>
+      </div>
     </Card>
   );
 };
 
 const App = () => {
-  const { connect, startScenario, scenarios, session, sessionId, trainerId, traineeId, connectionStatus } =
+  const { connect, startScenario, scenarios, session, sessionId, trainerId, traineeId, connectionStatus, updateScenario } =
     useTrainerStore((state) => ({
       connect: state.connect,
       startScenario: state.startScenario,
@@ -568,7 +1219,8 @@ const App = () => {
       sessionId: state.sessionId,
       trainerId: state.trainerId,
       traineeId: state.traineeId,
-      connectionStatus: state.connectionStatus
+      connectionStatus: state.connectionStatus,
+      updateScenario: state.updateScenario
     }));
 
   const scenario = useMemo(
@@ -625,7 +1277,7 @@ const App = () => {
             <ScenarioDetails scenario={scenario} />
             <Card title="Supervision des zones">
               {scenario ? (
-                <div className="grid gap-4 text-sm lg:grid-cols-2">
+                <div className="grid gap-4 text-sm lg:grid-cols-3">
                   <div>
                     <h4 className="text-xs font-semibold uppercase text-slate-500">Zones de détection</h4>
                     <ul className="mt-2 space-y-1">
@@ -638,6 +1290,26 @@ const App = () => {
                           <Indicator label={`ZD ${zone.id}`} active />
                         </li>
                       ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-semibold uppercase text-slate-500">Détection</h4>
+                    <ul className="mt-2 space-y-1">
+                      {scenario.peripherals.map((peripheral) => {
+                        const zoneLabel = scenario.zd.find((zone) => zone.id === peripheral.zoneId)?.name ?? peripheral.zoneId;
+                        const typeLabel = peripheral.type.replace(/_/g, ' ').toUpperCase();
+                        return (
+                          <li key={peripheral.id} className="rounded bg-slate-100 px-3 py-2">
+                            <div className="text-xs font-semibold text-slate-700">{peripheral.name}</div>
+                            <div className="text-[0.65rem] uppercase tracking-wide text-slate-500">
+                              {typeLabel} · {zoneLabel}
+                            </div>
+                          </li>
+                        );
+                      })}
+                      {scenario.peripherals.length === 0 && (
+                        <li className="rounded bg-slate-100 px-3 py-2 text-xs text-slate-500">Aucun périphérique configuré.</li>
+                      )}
                     </ul>
                   </div>
                   <div>
@@ -663,12 +1335,7 @@ const App = () => {
                 <p className="text-sm text-slate-500">Aucun scénario actif.</p>
               )}
             </Card>
-            <ScenarioEditor
-              scenario={scenario}
-              onUpdate={(updated) => {
-                console.log('Scenario updated (client-side)', updated);
-              }}
-            />
+            <ScenarioEditor scenario={scenario} onUpdate={updateScenario} />
           </main>
         </div>
       </div>
