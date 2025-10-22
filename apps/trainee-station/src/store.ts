@@ -72,6 +72,14 @@ const API_URL = metaEnv.VITE_SERVER_API ?? nodeEnv.VITE_SERVER_API ?? 'http://lo
 
 let socket: WebSocket | undefined;
 
+export const mergeScenarioDefinition = (scenarios: Scenario[], scenario: Scenario): Scenario[] => {
+  const existingIndex = scenarios.findIndex((item) => item.id === scenario.id);
+  if (existingIndex === -1) {
+    return [...scenarios, scenario];
+  }
+  return scenarios.map((item, index) => (index === existingIndex ? scenario : item));
+};
+
 export const useSessionStore = create<SessionStore>((set, get) => ({
   auth: undefined,
   authError: undefined,
@@ -116,7 +124,12 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       socket.addEventListener('message', (event) => {
         const data = JSON.parse(event.data);
         if (data.type === 'SESSION_STATE') {
-          set({ session: data.payload });
+          set((state) => ({
+            session: data.payload,
+            scenarios: data.payload?.scenarioDefinition
+              ? mergeScenarioDefinition(state.scenarios, data.payload.scenarioDefinition)
+              : state.scenarios
+          }));
         }
         if (data.type === 'ERROR') {
           console.error(data.message);
