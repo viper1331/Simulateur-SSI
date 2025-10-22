@@ -538,10 +538,13 @@ const CmsiFacade = ({
   }, [connect]);
 
   const scenario = useMemo(() => {
+    if (session?.scenarioDefinition) {
+      return session.scenarioDefinition;
+    }
     const scenarioId = session?.scenarioId;
     if (!scenarioId) return undefined;
     return scenarios.find((scn) => scn.id === scenarioId);
-  }, [scenarios, session?.scenarioId]);
+  }, [session?.scenarioDefinition, scenarios, session?.scenarioId]);
 
   const [cmsiSnapshot, sendCmsi] = useMachine(cmsiMachine, { input: undefined });
 
@@ -687,9 +690,12 @@ const App = () => {
   }, [auth, connectionStatus, connect]);
 
   const scenario = useMemo(() => {
+    if (session?.scenarioDefinition) {
+      return session.scenarioDefinition;
+    }
     if (!session?.scenarioId) return undefined;
     return scenarios.find((item) => item.id === session.scenarioId);
-  }, [scenarios, session?.scenarioId]);
+  }, [session?.scenarioDefinition, scenarios, session?.scenarioId]);
 
   const grantedAccessLevel: AccessLevel = session?.accessLevel ?? 0;
 

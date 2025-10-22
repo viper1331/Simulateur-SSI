@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Scenario, ScenarioEvent, User } from '@ssi/shared-models';
+import type { AccessLevel, Scenario, ScenarioEvent, User } from '@ssi/shared-models';
 
 const sessionIdForUser = (user: User) => `session-${user.id}`;
 
@@ -8,6 +8,7 @@ type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error';
 type SessionSnapshot = {
   id: string;
   scenarioId?: string;
+  scenarioDefinition?: Scenario;
   runId?: string;
   trainerId?: string;
   traineeId?: string;

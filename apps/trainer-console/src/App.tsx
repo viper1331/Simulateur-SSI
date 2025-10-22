@@ -1405,9 +1405,12 @@ const App = () => {
 
   const activeScenarioId = selectedScenarioId ?? session?.scenarioId;
   const scenario = useMemo(() => {
+    if (session?.scenarioDefinition) {
+      return session.scenarioDefinition;
+    }
     if (!activeScenarioId) return undefined;
     return scenarios.find((item) => item.id === activeScenarioId);
-  }, [scenarios, activeScenarioId]);
+  }, [session?.scenarioDefinition, scenarios, activeScenarioId]);
 
   const selectedTrainee = useMemo(
     () => trainees.find((trainee) => trainee.id === selectedTraineeId),

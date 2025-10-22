@@ -9,6 +9,7 @@ type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error';
 type SessionSnapshot = {
   id: string;
   scenarioId?: string;
+  scenarioDefinition?: Scenario;
   runId?: string;
   trainerId?: string;
   traineeId?: string;
@@ -245,8 +246,13 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
     set({ selectedTraineeId: traineeId, sessionId: newSessionId, session: undefined });
   },
   startScenario(scenarioId) {
-    const { selectedTraineeId, sessionId, auth } = get();
+    const { selectedTraineeId, sessionId, auth, scenarios } = get();
     if (!selectedTraineeId || !sessionId || !auth) return;
+    const scenario = scenarios.find((item) => item.id === scenarioId);
+    if (!scenario) {
+      logger.error('Scénario introuvable pour le démarrage', { scenarioId });
+      return;
+    }
     logger.info('Démarrage d’un scénario', { scenarioId, sessionId, traineeId: selectedTraineeId });
     socket?.send(
       JSON.stringify({
@@ -254,7 +260,8 @@ export const useTrainerStore = create<TrainerStore>((set, get) => ({
         sessionId,
         scenarioId,
         traineeId: selectedTraineeId,
-        token: auth.token
+        token: auth.token,
+        scenario
       })
     );
   },
