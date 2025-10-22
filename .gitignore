@@ -1,0 +1,11 @@
+node_modules
+pnpm-lock.yaml
+yarn.lock
+package-lock.json
+apps/**/dist
+apps/**/build
+packages/**/dist
+apps/server/db
+dist
+.tmp
+coverage
