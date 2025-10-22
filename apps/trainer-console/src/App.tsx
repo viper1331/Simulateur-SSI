@@ -9,28 +9,91 @@ const formatDuration = (seconds?: number) => {
   return `${seconds.toString().padStart(2, '0')} s`;
 };
 
-const ScenarioSelector = ({ scenarios, onSelect }: { scenarios: Scenario[]; onSelect: (id: string) => void }) => (
-  <div className="flex flex-wrap gap-2">
-    {scenarios.map((scenario) => (
-      <Button key={scenario.id} onClick={() => onSelect(scenario.id)} className="bg-indigo-100 text-indigo-700 hover:bg-indigo-200">
-        {scenario.name}
-      </Button>
-    ))}
+const SessionChip = ({ label, value }: { label: string; value?: string }) => (
+  <div className="rounded-full bg-white/10 px-3 py-1 text-[0.65rem] font-semibold uppercase tracking-widest text-indigo-100">
+    <span>{label}</span>
+    <span className="ml-2 text-white">{value ?? '—'}</span>
   </div>
+);
+
+const ConnectionBadge = ({
+  status
+}: {
+  status: 'idle' | 'connecting' | 'connected' | 'error';
+}) => {
+  const tone: 'danger' | 'warning' | 'ok' =
+    status === 'connected' ? 'ok' : status === 'error' ? 'danger' : 'warning';
+
+  const label =
+    status === 'connected'
+      ? 'Connecté'
+      : status === 'error'
+      ? 'Déconnecté'
+      : status === 'connecting'
+      ? 'Connexion…'
+      : 'En attente';
+
+  return <Indicator label={`Serveur ${label}`} tone={tone} active />;
+};
+
+const ScenarioSelector = ({
+  scenarios,
+  selectedScenarioId,
+  onSelect
+}: {
+  scenarios: Scenario[];
+  selectedScenarioId?: string;
+  onSelect: (id: string) => void;
+}) => (
+  <Card title="Scénarios disponibles">
+    {scenarios.length > 0 ? (
+      <div className="flex flex-col gap-2">
+        {scenarios.map((scenario) => {
+          const isActive = scenario.id === selectedScenarioId;
+          const eventsLabel = `${scenario.events.length} evt`;
+          const badgeTone = isActive ? 'text-indigo-100' : 'text-slate-500';
+
+          return (
+            <Button
+              key={scenario.id}
+              onClick={() => onSelect(scenario.id)}
+              className={`flex w-full items-start justify-between gap-3 border ${
+                isActive
+                  ? 'border-indigo-500 bg-indigo-600 text-white hover:bg-indigo-700'
+                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <span className="flex-1 text-left">
+                <span className="block text-sm font-semibold">{scenario.name}</span>
+                <span className="mt-1 block text-xs font-normal text-slate-500">
+                  {scenario.description ?? 'Scénario personnalisé'}
+                </span>
+              </span>
+              <span className={`text-xs font-semibold uppercase tracking-wide ${badgeTone}`}>{eventsLabel}</span>
+            </Button>
+          );
+        })}
+      </div>
+    ) : (
+      <p className="text-sm text-slate-500">Aucun scénario disponible pour le moment.</p>
+    )}
+  </Card>
 );
 
 const Timeline = () => {
   const timeline = useTrainerStore((state) => state.session?.timeline ?? []);
   return (
-    <div className="max-h-96 overflow-y-auto space-y-2">
+    <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
       {timeline.map((item) => (
         <div key={item.id} className="rounded border border-slate-200 bg-white p-3">
-          <div className="text-xs uppercase text-slate-400">{item.category}</div>
-          <div className="font-semibold text-slate-700">{item.message}</div>
-          <div className="text-xs text-slate-400">{new Date(item.timestamp).toLocaleTimeString()}</div>
+          <div className="text-[0.65rem] uppercase tracking-wide text-slate-400">{item.category}</div>
+          <div className="text-sm font-semibold text-slate-700">{item.message}</div>
+          <div className="text-[0.65rem] text-slate-400">{new Date(item.timestamp).toLocaleTimeString()}</div>
         </div>
       ))}
-      {timeline.length === 0 && <p className="text-sm text-slate-500">Aucun événement enregistré pour le moment.</p>}
+      {timeline.length === 0 && (
+        <p className="text-sm text-slate-500">Aucun événement enregistré pour le moment.</p>
+      )}
     </div>
   );
 };
@@ -125,9 +188,7 @@ const ScorePanel = () => {
             <li key={status.id} className="rounded border border-slate-200 bg-slate-50 p-2">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-semibold text-slate-600">{status.label}</span>
-                <span
-                  className={`text-xs font-semibold ${status.delta >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}
-                >
+                <span className={`text-xs font-semibold ${status.delta >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                   {status.delta >= 0 ? `+${status.delta}` : status.delta} pts
                 </span>
               </div>
@@ -205,7 +266,7 @@ const TraineeMonitoring = () => {
       tone: ackDone ? 'ok' : 'warning',
       description: ackDone
         ? "Le CMSI a été acquitté par l'apprenant."
-        : "En attente de l'action d'acquittement sur la façade." 
+        : "En attente de l'action d'acquittement sur la façade."
     },
     {
       id: 'reset',
@@ -298,105 +359,72 @@ const ScenarioDetails = ({ scenario }: { scenario?: Scenario }) => {
   );
 };
 
-const Dashboard = ({ scenario }: { scenario?: Scenario }) => {
+const TrainerControls = ({ scenario }: { scenario?: Scenario }) => {
   const triggerEvent = useTrainerStore((state) => state.triggerEvent);
   const stopScenario = useTrainerStore((state) => state.stopScenario);
   const session = useTrainerStore((state) => state.session);
 
+  const scenarioId = scenario?.id ?? 'unknown';
+  const hasActiveScenario = Boolean(scenario);
+  const hasActiveSession = Boolean(session);
+
   return (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-4">
-      <div className="space-y-4 xl:col-span-1">
-        <SessionOverview scenario={scenario} />
-        <ScorePanel />
-        <TraineeMonitoring />
-        <Card title="Commandes formateur">
-          <div className="space-y-2">
-            <Button
-              onClick={() =>
-                triggerEvent({ id: 'trainer-dm', scenarioId: scenario?.id ?? 'unknown', timestamp: Date.now(), type: 'ALARME_DM', payload: {} })
-              }
-              className="w-full bg-red-100 text-red-700 hover:bg-red-200"
-            >
-              Injecter alarme DM
-            </Button>
-            <Button
-              onClick={() =>
-                triggerEvent({ id: 'trainer-dai', scenarioId: scenario?.id ?? 'unknown', timestamp: Date.now(), type: 'ALARME_DAI', payload: {} })
-              }
-              className="w-full bg-amber-100 text-amber-700 hover:bg-amber-200"
-            >
-              Injecter alarme DAI
-            </Button>
-            <Button
-              onClick={() =>
-                triggerEvent({
-                  id: 'trainer-das',
-                  scenarioId: scenario?.id ?? 'unknown',
-                  timestamp: Date.now(),
-                  type: 'DAS_BLOQUE',
-                  payload: { dasId: scenario?.das[0]?.id }
-                })
-              }
-              className="w-full bg-rose-100 text-rose-700 hover:bg-rose-200"
-            >
-              Bloquer un DAS
-            </Button>
-            <Button
-              onClick={() =>
-                triggerEvent({ id: 'trainer-secteur', scenarioId: scenario?.id ?? 'unknown', timestamp: Date.now(), type: 'COUPURE_SECTEUR', payload: {} })
-              }
-              className="w-full bg-slate-200 text-slate-700 hover:bg-slate-300"
-            >
-              Simuler coupure secteur
-            </Button>
-            <Button onClick={stopScenario} className="w-full bg-slate-900 text-white hover:bg-black">
-              Arrêter le scénario
-            </Button>
-          </div>
-        </Card>
+    <Card title="Commandes formateur">
+      <p className="mb-3 text-xs text-slate-500">
+        Déclenchez des événements pour rythmer la session ou terminez le scénario en cours.
+      </p>
+      <div className="space-y-2">
+        <Button
+          onClick={() =>
+            triggerEvent({ id: 'trainer-dm', scenarioId, timestamp: Date.now(), type: 'ALARME_DM', payload: {} })
+          }
+          disabled={!hasActiveScenario}
+          className="w-full bg-red-100 text-red-700 hover:bg-red-200 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Injecter alarme DM
+        </Button>
+        <Button
+          onClick={() =>
+            triggerEvent({ id: 'trainer-dai', scenarioId, timestamp: Date.now(), type: 'ALARME_DAI', payload: {} })
+          }
+          disabled={!hasActiveScenario}
+          className="w-full bg-amber-100 text-amber-700 hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Injecter alarme DAI
+        </Button>
+        <Button
+          onClick={() =>
+            triggerEvent({
+              id: 'trainer-das',
+              scenarioId,
+              timestamp: Date.now(),
+              type: 'DAS_BLOQUE',
+              payload: { dasId: scenario?.das[0]?.id }
+            })
+          }
+          disabled={!hasActiveScenario}
+          className="w-full bg-rose-100 text-rose-700 hover:bg-rose-200 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Bloquer un DAS
+        </Button>
+        <Button
+          onClick={() =>
+            triggerEvent({ id: 'trainer-secteur', scenarioId, timestamp: Date.now(), type: 'COUPURE_SECTEUR', payload: {} })
+          }
+          disabled={!hasActiveScenario}
+          className="w-full bg-slate-200 text-slate-700 hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Simuler coupure secteur
+        </Button>
+        <Button
+          onClick={stopScenario}
+          disabled={!hasActiveSession}
+          className="w-full bg-slate-900 text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Arrêter le scénario
+        </Button>
       </div>
-      <div className="space-y-4 xl:col-span-3">
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <Card title="Timeline">
-            <Timeline />
-          </Card>
-          <ScenarioDetails scenario={scenario} />
-        </div>
-        <Card title="Supervision des zones">
-          {scenario ? (
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <h4 className="text-xs font-semibold uppercase text-slate-500">Zones de détection</h4>
-                <ul className="mt-2 space-y-1">
-                  {scenario.zd.map((zone) => (
-                    <li key={zone.id} className="flex items-center justify-between rounded bg-slate-100 px-3 py-2">
-                      <span>{zone.name}</span>
-                      <Indicator label={`ZD ${zone.id}`} active />
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <div>
-                <h4 className="text-xs font-semibold uppercase text-slate-500">DAS</h4>
-                <ul className="mt-2 space-y-1">
-                  {scenario.das.map((das) => {
-                    const status = session?.dasStatus?.[das.id] ?? das.status;
-                    return (
-                      <li key={das.id} className="flex items-center justify-between rounded bg-slate-100 px-3 py-2">
-                        <span>{das.name}</span>
-                        <Indicator label={status} active={status !== 'en_position'} tone="warning" />
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            </div>
-          ) : (
-            <p className="text-sm text-slate-500">Aucun scénario actif.</p>
-          )}
-        </Card>
-      </div>
-    </div>
+    </Card>
   );
 };
 
@@ -455,33 +483,118 @@ const ScenarioEditor = ({ scenario, onUpdate }: { scenario?: Scenario; onUpdate:
 };
 
 const App = () => {
-  const connect = useTrainerStore((state) => state.connect);
-  const startScenario = useTrainerStore((state) => state.startScenario);
-  const scenarios = useTrainerStore((state) => state.scenarios);
-  const session = useTrainerStore((state) => state.session);
-  const scenario = useMemo(() => scenarios.find((item) => item.id === session?.scenarioId), [scenarios, session?.scenarioId]);
+  const { connect, startScenario, scenarios, session, sessionId, trainerId, traineeId, connectionStatus } =
+    useTrainerStore((state) => ({
+      connect: state.connect,
+      startScenario: state.startScenario,
+      scenarios: state.scenarios,
+      session: state.session,
+      sessionId: state.sessionId,
+      trainerId: state.trainerId,
+      traineeId: state.traineeId,
+      connectionStatus: state.connectionStatus
+    }));
+
+  const scenario = useMemo(
+    () => scenarios.find((item) => item.id === session?.scenarioId),
+    [scenarios, session?.scenarioId]
+  );
 
   useEffect(() => {
     connect();
   }, [connect]);
 
   return (
-    <div className="min-h-screen bg-slate-100 p-6">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <header className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-slate-800">Console Formateur SSI</h1>
-            <p className="text-slate-500">Pilotez les événements, suivez l'apprenant et exportez le scoring.</p>
+    <div className="min-h-screen bg-slate-100 pb-12">
+      <div className="mx-auto max-w-7xl space-y-6 px-4 py-8">
+        <div className="overflow-hidden rounded-3xl bg-gradient-to-r from-slate-900 via-indigo-900 to-slate-800 p-6 text-white shadow-xl">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.35em] text-indigo-300">Simulation SSI</p>
+              <h1 className="mt-2 text-3xl font-semibold">Console Formateur SSI</h1>
+              <p className="mt-3 max-w-xl text-sm text-indigo-100">
+                Pilotez les événements du scénario, suivez l'apprenant et gardez le scoring sous contrôle en un coup d'œil.
+              </p>
+            </div>
+            <div className="flex flex-col items-start gap-4 lg:items-end">
+              <ConnectionBadge status={connectionStatus} />
+              <div className="flex flex-wrap items-center gap-2">
+                <SessionChip label="Session" value={session?.id ?? sessionId} />
+                <SessionChip label="Run" value={session?.runId ?? '—'} />
+                <SessionChip label="Formateur" value={trainerId} />
+                <SessionChip label="Apprenant" value={traineeId} />
+                <SessionChip label="Scénario" value={scenario?.name ?? 'En attente'} />
+              </div>
+            </div>
           </div>
-          <ScenarioSelector scenarios={scenarios} onSelect={startScenario} />
-        </header>
-        <Dashboard scenario={scenario} />
-        <ScenarioEditor
-          scenario={scenario}
-          onUpdate={(updated) => {
-            console.log('Scenario updated (client-side)', updated);
-          }}
-        />
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-[320px,1fr]">
+          <aside className="space-y-4">
+            <ScenarioSelector
+              scenarios={scenarios}
+              selectedScenarioId={scenario?.id ?? session?.scenarioId}
+              onSelect={startScenario}
+            />
+            <SessionOverview scenario={scenario} />
+            <ScorePanel />
+            <TraineeMonitoring />
+            <TrainerControls scenario={scenario} />
+          </aside>
+
+          <main className="space-y-4">
+            <Card title="Timeline">
+              <Timeline />
+            </Card>
+            <ScenarioDetails scenario={scenario} />
+            <Card title="Supervision des zones">
+              {scenario ? (
+                <div className="grid gap-4 text-sm lg:grid-cols-2">
+                  <div>
+                    <h4 className="text-xs font-semibold uppercase text-slate-500">Zones de détection</h4>
+                    <ul className="mt-2 space-y-1">
+                      {scenario.zd.map((zone) => (
+                        <li
+                          key={zone.id}
+                          className="flex items-center justify-between rounded bg-slate-100 px-3 py-2"
+                        >
+                          <span>{zone.name}</span>
+                          <Indicator label={`ZD ${zone.id}`} active />
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-semibold uppercase text-slate-500">DAS</h4>
+                    <ul className="mt-2 space-y-1">
+                      {scenario.das.map((das) => {
+                        const status = session?.dasStatus?.[das.id] ?? das.status;
+                        const active = status !== 'en_position';
+                        return (
+                          <li
+                            key={das.id}
+                            className="flex items-center justify-between rounded bg-slate-100 px-3 py-2"
+                          >
+                            <span>{das.name}</span>
+                            <Indicator label={status} active={active} tone={active ? 'warning' : 'ok'} />
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-500">Aucun scénario actif.</p>
+              )}
+            </Card>
+            <ScenarioEditor
+              scenario={scenario}
+              onUpdate={(updated) => {
+                console.log('Scenario updated (client-side)', updated);
+              }}
+            />
+          </main>
+        </div>
       </div>
     </div>
   );
