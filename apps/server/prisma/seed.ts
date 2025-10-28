@@ -5,6 +5,22 @@ import { defaultScenarios } from '@ssi/shared-models';
 const prisma = new PrismaClient();
 
 async function main() {
+  await prisma.siteConfig.upsert({
+    where: { id: 1 },
+    update: {},
+    create: {
+      evacOnDAI: false,
+      evacOnDMDelayMs: 5000,
+      processAckRequired: true
+    }
+  });
+
+  await prisma.processAck.upsert({
+    where: { id: 1 },
+    update: { isAcked: false, ackedBy: null, ackedAt: null, clearedAt: null },
+    create: { isAcked: false }
+  });
+
   for (const scenario of defaultScenarios) {
     const serializedConfig = JSON.stringify({
       t1: scenario.t1,
