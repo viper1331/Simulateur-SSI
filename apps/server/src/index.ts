@@ -18,6 +18,7 @@ import { v4 as uuid } from 'uuid';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
+import { processAckSchema, siteConfigSchema } from './configSchema';
 
 const parseJson = <T>(value: string | null | undefined): T | undefined => {
   if (!value) return undefined;
@@ -104,15 +105,165 @@ type ClientMessage =
     }
   | { type: 'STOP_SCENARIO'; sessionId: string; token: string };
 
+type SiteConfigPayload = {
+  evacOnDAI: boolean;
+  evacOnDMDelayMs: number;
+  processAckRequired: boolean;
+};
+
 type ServerMessage =
   | { type: 'SESSION_STATE'; payload: SessionState }
-  | { type: 'ERROR'; message: string };
+  | { type: 'ERROR'; message: string }
+  | { type: 'process.acked'; payload: { ackedBy?: string | null; ackedAt: string } }
+  | { type: 'process.cleared'; payload: { clearedAt: string } }
+  | { type: 'dm.latched'; payload: { zoneId: string; at: string } }
+  | { type: 'dm.cleared'; payload: { zoneId: string; at: string } }
+  | {
+      type: 'state.update';
+      payload: { cmsi: 'IDLE' | 'EVAC_PENDING' | 'EVAC_ACTIVE'; zoneId?: string; reason?: string };
+    }
+  | { type: 'site_config.updated'; payload: SiteConfigPayload }
+  | { type: 'events.append'; payload: { type: string; at: string; details?: Record<string, unknown> } };
 
 const prisma = new PrismaClient();
 const JWT_SECRET = process.env.JWT_SECRET ?? 'development-secret';
 
 type SanitizedUser = z.infer<typeof userSchema>;
 
+interface CmsiStateSnapshot {
+  phase: 'IDLE' | 'EVAC_PENDING' | 'EVAC_ACTIVE';
+  zoneId?: string;
+  timer?: NodeJS.Timeout;
+  timerElapsed: boolean;
+}
+
+let cmsiState: CmsiStateSnapshot = { phase: 'IDLE', timerElapsed: false };
+
+const connectedSockets = new Set<WebSocket>();
+
+const toSiteConfigPayload = (config: {
+  evacOnDAI: boolean;
+  evacOnDMDelayMs: number;
+  processAckRequired: boolean;
+}): SiteConfigPayload => ({
+  evacOnDAI: config.evacOnDAI,
+  evacOnDMDelayMs: config.evacOnDMDelayMs,
+  processAckRequired: config.processAckRequired
+});
+
+const broadcastGlobal = (message: ServerMessage): void => {
+  const payload = JSON.stringify(message);
+  connectedSockets.forEach((socket) => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(payload);
+    }
+  });
+};
+
+const appendEventLog = async (
+  type: string,
+  details?: Record<string, unknown>,
+  message?: string
+): Promise<void> => {
+  await prisma.eventLog.create({
+    data: {
+      type,
+      message: message ?? null,
+      payload: details ? JSON.stringify(details) : null
+    }
+  });
+  broadcastGlobal({
+    type: 'events.append',
+    payload: { type, at: new Date().toISOString(), details }
+  });
+};
+
+const ensureSiteConfig = async () => {
+  const existing = await prisma.siteConfig.findUnique({ where: { id: 1 } });
+  if (existing) return existing;
+  return prisma.siteConfig.create({
+    data: {
+      id: 1,
+      evacOnDAI: false,
+      evacOnDMDelayMs: 5000,
+      processAckRequired: true
+    }
+  });
+};
+
+const ensureProcessAck = async () => {
+  const existing = await prisma.processAck.findUnique({ where: { id: 1 } });
+  if (existing) return existing;
+  return prisma.processAck.create({ data: { id: 1, isAcked: false } });
+};
+
+const getLatchedZones = async (): Promise<string[]> => {
+  const manualPoints = await prisma.manualCallPoint.findMany({ where: { isLatched: true } });
+  return manualPoints.map((point) => point.zoneId);
+};
+
+const resetCmsiState = () => {
+  if (cmsiState.timer) {
+    clearTimeout(cmsiState.timer);
+  }
+  cmsiState = { phase: 'IDLE', timerElapsed: false };
+  broadcastGlobal({ type: 'state.update', payload: { cmsi: 'IDLE' } });
+};
+
+const tryEnterEvacActive = async (): Promise<void> => {
+  if (cmsiState.phase !== 'EVAC_PENDING' || !cmsiState.zoneId) {
+    return;
+  }
+  const config = await ensureSiteConfig();
+  const processAck = await ensureProcessAck();
+  if (config.processAckRequired && !processAck.isAcked) {
+    cmsiState.timerElapsed = true;
+    await appendEventLog('CMSI_WAITING_PROCESS_ACK', { zoneId: cmsiState.zoneId });
+    broadcastGlobal({
+      type: 'state.update',
+      payload: {
+        cmsi: 'EVAC_PENDING',
+        zoneId: cmsiState.zoneId,
+        reason: 'WAITING_PROCESS_ACK'
+      }
+    });
+    return;
+  }
+  cmsiState = { phase: 'EVAC_ACTIVE', zoneId: cmsiState.zoneId, timerElapsed: false };
+  await appendEventLog('CMSI_EVAC_ACTIVE', { zoneId: cmsiState.zoneId });
+  broadcastGlobal({ type: 'state.update', payload: { cmsi: 'EVAC_ACTIVE', zoneId: cmsiState.zoneId } });
+};
+
+const scheduleEvacuationCheck = async (zoneId: string) => {
+  const config = await ensureSiteConfig();
+  if (cmsiState.timer) {
+    clearTimeout(cmsiState.timer);
+  }
+  cmsiState = {
+    phase: 'EVAC_PENDING',
+    zoneId,
+    timerElapsed: false,
+    timer: setTimeout(() => {
+      cmsiState.timer = undefined;
+      void tryEnterEvacActive();
+    }, config.evacOnDMDelayMs)
+  };
+  broadcastGlobal({ type: 'state.update', payload: { cmsi: 'EVAC_PENDING', zoneId } });
+  await appendEventLog('CMSI_EVAC_PENDING', { zoneId, delayMs: config.evacOnDMDelayMs });
+};
+
+const handleProcessAckChange = async () => {
+  if (cmsiState.phase === 'EVAC_PENDING' && cmsiState.timerElapsed) {
+    await tryEnterEvacActive();
+  }
+};
+
+const ensureCmsiConsistency = async () => {
+  const latched = await getLatchedZones();
+  if (latched.length === 0) {
+    resetCmsiState();
+  }
+};
 const registrationSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
@@ -272,6 +423,175 @@ app.get('/api/users', authenticate, async (req, res) => {
   const where = parsedRole?.success ? { role: parsedRole.data } : {};
   const users = await prisma.user.findMany({ where, orderBy: { name: 'asc' } });
   res.json(users.map(sanitizeUser));
+});
+
+app.get('/api/config/site', authenticate, async (_req, res) => {
+  const config = await ensureSiteConfig();
+  res.json(toSiteConfigPayload(config));
+});
+
+app.put('/api/config/site', authenticate, async (req, res) => {
+  const authReq = req as AuthenticatedRequest;
+  if (!authReq.user || authReq.user.role !== 'TRAINER') {
+    return res.status(403).json({ error: 'Accès formateur requis' });
+  }
+  try {
+    const payload = siteConfigSchema.parse(req.body);
+    await ensureSiteConfig();
+    const updated = await prisma.siteConfig.update({
+      where: { id: 1 },
+      data: {
+        evacOnDAI: payload.evacOnDAI,
+        evacOnDMDelayMs: payload.evacOnDMDelayMs,
+        processAckRequired: payload.processAckRequired
+      }
+    });
+    await appendEventLog('SITE_CONFIG_UPDATED', payload);
+    broadcastGlobal({ type: 'site_config.updated', payload: toSiteConfigPayload(updated) });
+    if (!updated.processAckRequired && cmsiState.phase === 'EVAC_PENDING' && !cmsiState.timer) {
+      await tryEnterEvacActive();
+    }
+    res.json(toSiteConfigPayload(updated));
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Requête invalide', details: error.flatten() });
+    }
+    console.error('Failed to update site config', error);
+    res.status(500).json({ error: 'Impossible de mettre à jour la configuration.' });
+  }
+});
+
+app.post('/api/process/ack', authenticate, async (req, res) => {
+  try {
+    const payload = processAckSchema.parse(req.body);
+    const now = new Date();
+    await ensureProcessAck();
+    const updated = await prisma.processAck.update({
+      where: { id: 1 },
+      data: {
+        isAcked: true,
+        ackedBy: payload.ackedBy,
+        ackedAt: now,
+        clearedAt: null
+      }
+    });
+    await appendEventLog('PROCESS_ACK', { ackedBy: payload.ackedBy });
+    broadcastGlobal({
+      type: 'process.acked',
+      payload: { ackedBy: updated.ackedBy, ackedAt: (updated.ackedAt ?? now).toISOString() }
+    });
+    await handleProcessAckChange();
+    res.status(204).send();
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Requête invalide', details: error.flatten() });
+    }
+    console.error('Failed to set process ack', error);
+    res.status(500).json({ error: "Impossible d'enregistrer l'acquit." });
+  }
+});
+
+app.post('/api/process/clear', authenticate, async (_req, res) => {
+  try {
+    const now = new Date();
+    const previous = await ensureProcessAck();
+    const updated = await prisma.processAck.update({
+      where: { id: 1 },
+      data: {
+        isAcked: false,
+        ackedBy: null,
+        ackedAt: null,
+        clearedAt: now
+      }
+    });
+    await appendEventLog('PROCESS_ACK_CLEAR', {});
+    if (previous.isAcked) {
+      broadcastGlobal({
+        type: 'process.cleared',
+        payload: { clearedAt: (updated.clearedAt ?? now).toISOString() }
+      });
+    }
+    res.status(204).send();
+  } catch (error) {
+    console.error('Failed to clear process ack', error);
+    res.status(500).json({ error: "Impossible de retirer l'acquit." });
+  }
+});
+
+app.post('/api/sdi/dm/:zone/activate', authenticate, async (req, res) => {
+  const zoneId = req.params.zone?.toUpperCase();
+  if (!zoneId) {
+    return res.status(400).json({ error: 'ZONE_ID_REQUIRED' });
+  }
+  try {
+    const now = new Date();
+    await prisma.manualCallPoint.upsert({
+      where: { zoneId },
+      update: { isLatched: true, lastActivatedAt: now },
+      create: { zoneId, isLatched: true, lastActivatedAt: now }
+    });
+    await appendEventLog('SDI_DM', { zoneId });
+    broadcastGlobal({ type: 'dm.latched', payload: { zoneId, at: now.toISOString() } });
+    await scheduleEvacuationCheck(zoneId);
+    res.status(204).send();
+  } catch (error) {
+    console.error('Failed to latch DM', error);
+    res.status(500).json({ error: 'IMPOSSIBLE_D_ACTIVER_DM' });
+  }
+});
+
+app.post('/api/sdi/dm/:zone/reset', authenticate, async (req, res) => {
+  const zoneId = req.params.zone?.toUpperCase();
+  if (!zoneId) {
+    return res.status(400).json({ error: 'ZONE_ID_REQUIRED' });
+  }
+  try {
+    const now = new Date();
+    await prisma.manualCallPoint.upsert({
+      where: { zoneId },
+      update: { isLatched: false, lastResetAt: now },
+      create: { zoneId, isLatched: false, lastResetAt: now }
+    });
+    await appendEventLog('DM_RESET', { zoneId });
+    broadcastGlobal({ type: 'dm.cleared', payload: { zoneId, at: now.toISOString() } });
+    await ensureCmsiConsistency();
+    res.status(204).send();
+  } catch (error) {
+    console.error('Failed to reset DM', error);
+    res.status(500).json({ error: 'IMPOSSIBLE_DE_REARMER_DM' });
+  }
+});
+
+app.post('/api/system/reset', authenticate, async (_req, res) => {
+  try {
+    const latched = await getLatchedZones();
+    if (latched.length > 0) {
+      await appendEventLog('SYSTEM_RESET_DENIED', { reason: 'DM_NOT_RESET', zones: latched });
+      return res.status(409).json({ error: 'DM_NOT_RESET', details: latched });
+    }
+
+    const previousAck = await ensureProcessAck();
+    const clearedAt = new Date();
+    await prisma.processAck.update({
+      where: { id: 1 },
+      data: {
+        isAcked: false,
+        ackedBy: null,
+        ackedAt: null,
+        clearedAt
+      }
+    });
+    if (previousAck.isAcked) {
+      await appendEventLog('PROCESS_ACK_CLEAR', { reason: 'SYSTEM_RESET' });
+      broadcastGlobal({ type: 'process.cleared', payload: { clearedAt: clearedAt.toISOString() } });
+    }
+    resetCmsiState();
+    await appendEventLog('SYSTEM_RESET_OK', {});
+    res.status(204).send();
+  } catch (error) {
+    console.error('Failed to perform system reset', error);
+    res.status(500).json({ error: 'SYSTEM_RESET_FAILED' });
+  }
 });
 
 const addTimeline = (session: Session, message: string, category: TimelineEntry['category']): void => {
@@ -793,6 +1113,7 @@ const handleMessage = async (ws: WebSocket, message: ClientMessage) => {
 };
 
 wss.on('connection', (ws) => {
+  connectedSockets.add(ws);
   ws.on('message', (data) => {
     try {
       const message = JSON.parse(data.toString()) as ClientMessage;
@@ -804,6 +1125,7 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
+    connectedSockets.delete(ws);
     sessions.forEach((session) => {
       session.trainers.delete(ws);
       session.trainees.delete(ws);

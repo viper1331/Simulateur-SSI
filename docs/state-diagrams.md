@@ -4,11 +4,12 @@
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
-    IDLE --> PREALERTE: TRIGGER_PREALERTE
-    PREALERTE --> ALERTE: TICK / T1 écoulé
-    ALERTE --> UGA_ACTIVE: TICK / T2 écoulé
-    UGA_ACTIVE --> RETOUR_NORMAL: ACK
-    RETOUR_NORMAL --> IDLE: RESET
+    IDLE --> EVAC_PENDING: DM_LATCH(zone)
+    EVAC_PENDING --> EVAC_ACTIVE: T + evacOnDMDelayMs & (processAckRequired ? ACQUIT_PROCESSUS : true)
+    EVAC_PENDING --> IDLE: SYSTEM_RESET / aucun DM latched
+    EVAC_ACTIVE --> IDLE: SYSTEM_RESET / tous les DM réarmés
+    EVAC_PENDING --> EVAC_PENDING: SYSTEM_RESET / DM latched → refus DM_NOT_RESET
+    EVAC_ACTIVE --> EVAC_ACTIVE: SYSTEM_RESET / DM latched → refus DM_NOT_RESET
 ```
 
 ## DAS
@@ -19,6 +20,23 @@ stateDiagram-v2
     COMMANDE --> EN_POSITION: CONFIRMER_POSITION
     COMMANDE --> DEFAUT: SIGNALER_DEFAUT
     DEFAUT --> EN_POSITION: REARMER
+```
+
+## Déclencheur Manuel (DM)
+```mermaid
+stateDiagram-v2
+    [*] --> CLEARED
+    CLEARED --> LATCHED: DM_ACTIVATE(zone)
+    LATCHED --> CLEARED: DM_RESET(zone)
+```
+
+## Acquit Processus
+```mermaid
+stateDiagram-v2
+    [*] --> NOT_ACKED
+    NOT_ACKED --> ACKED: POST /api/process/ack
+    ACKED --> NOT_ACKED: POST /api/process/clear
+    ACKED --> NOT_ACKED: POST /api/system/reset
 ```
 
 ## Alimentation
