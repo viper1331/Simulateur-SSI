@@ -135,7 +135,7 @@ input:not([type='checkbox']):not([type='radio']):not([type='range']) {
 .ecs-panel__body {
   display: grid;
   gap: 1.5rem;
-  grid-template-columns: minmax(240px, 1fr) minmax(220px, 1fr) minmax(160px, 200px);
+  grid-template-columns: minmax(240px, 1fr) minmax(220px, 1fr) minmax(200px, 240px);
 }
 
 .ecs-panel__screen {
@@ -206,10 +206,53 @@ input:not([type='checkbox']):not([type='radio']):not([type='range']) {
   border-color: rgba(255, 255, 255, 0.8);
 }
 
+.ecs-panel__controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.ecs-panel__view-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.ecs-panel__view-button {
+  border: none;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #e5e9f6 0%, #cbd3ea 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 4px 10px rgba(15, 23, 42, 0.18);
+  color: #1f2937;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.55rem 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  cursor: pointer;
+}
+
+.ecs-panel__view-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.ecs-panel__view-button:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 6px 14px rgba(30, 41, 59, 0.22);
+}
+
+.ecs-panel__view-button--active {
+  background: linear-gradient(180deg, #4f46e5 0%, #4338ca 100%);
+  color: #f8fafc;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24), 0 10px 18px rgba(67, 56, 202, 0.28);
+}
+
 .ecs-panel__keypad {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
   background: linear-gradient(180deg, #e9edf7 0%, #d7ddef 100%);
   border-radius: 22px;
   padding: 1.1rem;
@@ -227,6 +270,26 @@ input:not([type='checkbox']):not([type='radio']):not([type='range']) {
   border-radius: 14px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 6px 12px rgba(15, 23, 42, 0.12);
   padding: 0.65rem 0;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ecs-panel__key:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), 0 0 0 rgba(0, 0, 0, 0);
+}
+
+.ecs-panel__key:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 8px 16px rgba(30, 41, 59, 0.22);
+}
+
+.ecs-panel__key:focus-visible,
+.ecs-panel__view-button:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.9);
+  outline-offset: 2px;
 }
 
 .smsi-board {
