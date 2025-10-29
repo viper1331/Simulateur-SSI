@@ -11,6 +11,7 @@ const nodeExecutable = npmExecPath ? process.execPath : undefined;
 const commands = [
   { label: 'server', workspace: 'apps/server', script: 'dev' },
   { label: 'trainee', workspace: 'apps/trainee-station', script: 'dev' },
+  { label: 'central', workspace: 'apps/central-panel', script: 'dev' },
   { label: 'trainer', workspace: 'apps/trainer-console', script: 'dev' }
 ];
 
