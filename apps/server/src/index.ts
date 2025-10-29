@@ -185,7 +185,7 @@ const ensureSiteConfig = async () => {
     data: {
       id: 1,
       evacOnDAI: false,
-      evacOnDMDelayMs: 5000,
+      evacOnDMDelayMs: 300000,
       processAckRequired: true
     }
   });
@@ -531,6 +531,24 @@ app.post('/api/sdi/dm/:zone/activate', authenticate, async (req, res) => {
       create: { zoneId, isLatched: true, lastActivatedAt: now }
     });
     await appendEventLog('SDI_DM', { zoneId });
+    const processAck = await ensureProcessAck();
+    if (processAck.isAcked) {
+      const clearedAt = new Date();
+      const updated = await prisma.processAck.update({
+        where: { id: 1 },
+        data: {
+          isAcked: false,
+          ackedBy: null,
+          ackedAt: null,
+          clearedAt
+        }
+      });
+      await appendEventLog('PROCESS_ACK_CLEAR', { reason: 'DM_TRIGGER', zoneId });
+      broadcastGlobal({
+        type: 'process.cleared',
+        payload: { clearedAt: (updated.clearedAt ?? clearedAt).toISOString() }
+      });
+    }
     broadcastGlobal({ type: 'dm.latched', payload: { zoneId, at: now.toISOString() } });
     await scheduleEvacuationCheck(zoneId);
     res.status(204).send();

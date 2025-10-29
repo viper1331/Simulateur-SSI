@@ -1,12 +1,20 @@
-import { ChangeEvent, FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { useSessionStore } from './store';
 import { Button, Card, Indicator } from '@ssi/ui-kit';
 import { cmsiMachine } from '@ssi/state-machines';
 import { useMachine } from '@xstate/react';
-import type { AccessLevel, Scenario } from '@ssi/shared-models';
+import type { AccessLevel, DetectionPeripheral, Scenario } from '@ssi/shared-models';
 import { ACCESS_CODES, ACCESS_LEVELS, initialScoreRules } from '@ssi/shared-models';
 
 type ActiveAlarms = { dm: string[]; dai: string[] };
+
+const detectionTypeLabels: Record<DetectionPeripheral['type'], string> = {
+  dm: 'Déclencheur manuel',
+  dai: 'Détecteur automatique',
+  detecteur_chaleur: 'Détecteur de chaleur',
+  detecteur_fumee: 'Détecteur de fumée',
+  autre: 'Point de détection'
+};
 
 const Buzzer = ({ active }: { active: boolean }) => {
   useEffect(() => {
@@ -320,6 +328,40 @@ const chunk = <T,>(items: T[], size: number): T[][] => {
   return result;
 };
 
+const buildDetectionMessages = (scenario?: Scenario, activeAlarms?: ActiveAlarms): string[] => {
+  if (!scenario || !activeAlarms) {
+    return [];
+  }
+  const zoneNameById = new Map<string, string>();
+  (scenario?.zd ?? []).forEach((zone) => zoneNameById.set(zone.id, zone.name));
+  const formatLabel = (type: 'DM' | 'DAI') => (zoneId: string) => {
+    const zoneLabel = zoneNameById.get(zoneId) ?? zoneId.toUpperCase();
+    return `${type} ${zoneId.toUpperCase()} - ${zoneLabel}`;
+  };
+  const dmMessages = (activeAlarms.dm ?? []).map(formatLabel('DM'));
+  const daiMessages = (activeAlarms.dai ?? []).map(formatLabel('DAI'));
+  return [...dmMessages, ...daiMessages];
+};
+
+const buildDetectionLines = (scenario?: Scenario, activeAlarms?: ActiveAlarms): string[] => {
+  const messages = buildDetectionMessages(scenario, activeAlarms);
+  return messages.length > 0 ? chunk(messages, 2).map((items) => items.join('  |  ')) : [];
+};
+
+const getZoneAlarmTags = (zoneId: string, activeAlarms?: ActiveAlarms): string => {
+  if (!activeAlarms) {
+    return '';
+  }
+  const tags: string[] = [];
+  if (activeAlarms.dm?.includes(zoneId)) {
+    tags.push('DM');
+  }
+  if (activeAlarms.dai?.includes(zoneId)) {
+    tags.push('DAI');
+  }
+  return tags.length > 0 ? ` ⚠ ${tags.join(' / ')}` : '';
+};
+
 const EcsPanel = ({
   scenario,
   session,
@@ -335,13 +377,244 @@ const EcsPanel = ({
   connectionTone: 'ok' | 'warning' | 'danger';
   statusItems: StatusItem[];
 }) => {
-  const keypadLayout = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '↩', '0', '⌫'];
+  const detectionTree = useMemo(
+    () =>
+      scenario
+        ? scenario.zd.map((zone) => ({
+            zone,
+            peripherals: (scenario.peripherals ?? []).filter((peripheral) => peripheral.zoneId === zone.id)
+          }))
+        : [],
+    [scenario]
+  );
+
+  const [panelMode, setPanelMode] = useState<'summary' | 'tree'>('summary');
+  const [treeState, setTreeState] = useState<{ zoneIndex: number; peripheralIndex: number | null }>(
+    { zoneIndex: 0, peripheralIndex: null }
+  );
+
+  useEffect(() => {
+    setTreeState({ zoneIndex: 0, peripheralIndex: null });
+  }, [scenario?.id]);
+
+  useEffect(() => {
+    if (!scenario && panelMode === 'tree') {
+      setPanelMode('summary');
+    }
+  }, [panelMode, scenario]);
+
+  useEffect(() => {
+    setTreeState((prev) => {
+      if (detectionTree.length === 0) {
+        if (prev.zoneIndex === 0 && prev.peripheralIndex === null) {
+          return prev;
+        }
+        return { zoneIndex: 0, peripheralIndex: null };
+      }
+      const safeZoneIndex = Math.min(prev.zoneIndex, detectionTree.length - 1);
+      const zone = detectionTree[safeZoneIndex];
+      if (!zone) {
+        return { zoneIndex: 0, peripheralIndex: null };
+      }
+      if (zone.peripherals.length === 0) {
+        if (safeZoneIndex === prev.zoneIndex && prev.peripheralIndex === null) {
+          return prev;
+        }
+        return { zoneIndex: safeZoneIndex, peripheralIndex: null };
+      }
+      const safePeripheralIndex =
+        prev.peripheralIndex === null
+          ? null
+          : Math.min(prev.peripheralIndex, zone.peripherals.length - 1);
+      if (safeZoneIndex === prev.zoneIndex && safePeripheralIndex === prev.peripheralIndex) {
+        return prev;
+      }
+      return { zoneIndex: safeZoneIndex, peripheralIndex: safePeripheralIndex };
+    });
+  }, [detectionTree]);
+
+  const handleTreeUp = useCallback(() => {
+    if (detectionTree.length === 0) return;
+    setTreeState((prev) => {
+      if (prev.peripheralIndex === null) {
+        const nextZoneIndex = (prev.zoneIndex - 1 + detectionTree.length) % detectionTree.length;
+        return { zoneIndex: nextZoneIndex, peripheralIndex: null };
+      }
+      if (prev.peripheralIndex > 0) {
+        return { ...prev, peripheralIndex: prev.peripheralIndex - 1 };
+      }
+      return { zoneIndex: prev.zoneIndex, peripheralIndex: null };
+    });
+  }, [detectionTree]);
+
+  const handleTreeDown = useCallback(() => {
+    if (detectionTree.length === 0) return;
+    setTreeState((prev) => {
+      const zone = detectionTree[Math.min(prev.zoneIndex, detectionTree.length - 1)];
+      if (!zone) {
+        return prev;
+      }
+      if (prev.peripheralIndex === null) {
+        if (zone.peripherals.length > 0) {
+          return { zoneIndex: prev.zoneIndex, peripheralIndex: 0 };
+        }
+        if (detectionTree.length === 1) {
+          return prev;
+        }
+        const nextZoneIndex = (prev.zoneIndex + 1) % detectionTree.length;
+        return { zoneIndex: nextZoneIndex, peripheralIndex: null };
+      }
+      if (zone.peripherals.length === 0) {
+        return { zoneIndex: prev.zoneIndex, peripheralIndex: null };
+      }
+      const nextPeripheralIndex = prev.peripheralIndex + 1;
+      if (nextPeripheralIndex < zone.peripherals.length) {
+        return { ...prev, peripheralIndex: nextPeripheralIndex };
+      }
+      if (detectionTree.length === 1) {
+        return { zoneIndex: prev.zoneIndex, peripheralIndex: 0 };
+      }
+      const nextZoneIndex = (prev.zoneIndex + 1) % detectionTree.length;
+      const nextZone = detectionTree[nextZoneIndex];
+      return {
+        zoneIndex: nextZoneIndex,
+        peripheralIndex: nextZone.peripherals.length > 0 ? 0 : null
+      };
+    });
+  }, [detectionTree]);
+
+  const handleTreeSelect = useCallback(() => {
+    if (detectionTree.length === 0) return;
+    setTreeState((prev) => {
+      const zone = detectionTree[Math.min(prev.zoneIndex, detectionTree.length - 1)];
+      if (!zone) {
+        return prev;
+      }
+      if (prev.peripheralIndex === null && zone.peripherals.length > 0) {
+        return { zoneIndex: prev.zoneIndex, peripheralIndex: 0 };
+      }
+      return prev;
+    });
+  }, [detectionTree]);
+
+  const handleTreeBack = useCallback(() => {
+    setTreeState((prev) =>
+      prev.peripheralIndex === null ? prev : { zoneIndex: prev.zoneIndex, peripheralIndex: null }
+    );
+  }, []);
+
+  useEffect(() => {
+    if (panelMode !== 'tree') return;
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        handleTreeUp();
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        handleTreeDown();
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        handleTreeSelect();
+      } else if (event.key === 'Escape' || event.key === 'Backspace') {
+        event.preventDefault();
+        handleTreeBack();
+      }
+    };
+    window.addEventListener('keydown', handleKeydown);
+    return () => window.removeEventListener('keydown', handleKeydown);
+  }, [handleTreeBack, handleTreeDown, handleTreeSelect, handleTreeUp, panelMode]);
+
+  const detectionLines = buildDetectionLines(scenario, session?.activeAlarms);
+  const connectionLine = `CONNEXION: ${connectionLabel.toUpperCase()}`;
   const summaryLines = [
-    `Scénario : ${scenario?.name ?? '—'}`,
-    `Phase : ${(session?.cmsiPhase ?? 'Repos').toString().toUpperCase()}`,
-    `Session : ${sessionId ?? '—'}`,
-    `Zones : ${scenario?.zd.length ?? 0} / DAS : ${scenario?.das.length ?? 0}`
+    scenario
+      ? `SCENARIO: ${scenario.name.toUpperCase()} (${scenario.zd.length} ZD / ${scenario.das.length} DAS)`
+      : 'SCENARIO: AUCUN',
+    `PHASE: ${(session?.cmsiPhase ?? 'REPOS').toString().toUpperCase()} | SESSION ${sessionId ?? '—'}`,
+    detectionLines[0] ?? 'AUCUNE DETECTION EN ALARME',
+    detectionLines[1] ?? connectionLine
   ];
+
+  const activeZone = detectionTree[Math.min(treeState.zoneIndex, detectionTree.length - 1)];
+  const selectedPeripheral =
+    activeZone && treeState.peripheralIndex !== null
+      ? activeZone.peripherals[treeState.peripheralIndex] ?? undefined
+      : undefined;
+
+  const treeLines = (() => {
+    if (!scenario) {
+      return ['MODE: ARBRE DETECTION', 'AUCUN SCENARIO EN COURS', '—', connectionLine];
+    }
+    if (!activeZone) {
+      return ['MODE: ARBRE DETECTION', 'AUCUNE ZONE DEFINIE', '—', connectionLine];
+    }
+    const zoneCountLabel = `${treeState.zoneIndex + 1}/${detectionTree.length || 1}`;
+    const zoneLinePrefix = treeState.peripheralIndex === null ? '>' : ' ';
+    const zoneAlarmTags = getZoneAlarmTags(activeZone.zone.id, session?.activeAlarms);
+    const zoneLine = `${zoneLinePrefix} ZD ${activeZone.zone.id.toUpperCase()} - ${activeZone.zone.name}${zoneAlarmTags} (${zoneCountLabel})`;
+
+    if (activeZone.peripherals.length === 0) {
+      return [
+        'MODE: ARBRE DETECTION',
+        zoneLine,
+        '  Aucun point de détection associé',
+        'CMD: ▲▼ NAVIGUER  ⤺ RETOUR'
+      ];
+    }
+
+    if (treeState.peripheralIndex === null) {
+      return [
+        'MODE: ARBRE DETECTION',
+        zoneLine,
+        `  ${activeZone.peripherals.length} point(s) de détection — ↲ pour détailler`,
+        'CMD: ▲▼ NAVIGUER  ↲ ENTRER  ⤺ RETOUR'
+      ];
+    }
+
+    const typeKey: DetectionPeripheral['type'] = selectedPeripheral?.type ?? 'autre';
+    const typeLabel = detectionTypeLabels[typeKey];
+    const periphIndexLabel = `${treeState.peripheralIndex + 1}/${activeZone.peripherals.length}`;
+    const periphLine = `> ${selectedPeripheral?.name ?? 'Point inconnu'} (${typeLabel})${zoneAlarmTags}`;
+    return [
+      'MODE: ARBRE DETECTION',
+      zoneLine,
+      periphLine,
+      `CMD: ▲▼ NAVIGUER  ⤺ RETOUR  · ${periphIndexLabel}`
+    ];
+  })();
+
+  const screenLines = panelMode === 'tree' ? treeLines : summaryLines;
+
+  const keypadButtons = [
+    {
+      label: '▲',
+      onClick: handleTreeUp,
+      disabled: panelMode !== 'tree' || detectionTree.length === 0,
+      ariaLabel: "Monter dans l'arbre de détection"
+    },
+    {
+      label: '▼',
+      onClick: handleTreeDown,
+      disabled: panelMode !== 'tree' || detectionTree.length === 0,
+      ariaLabel: "Descendre dans l'arbre de détection"
+    },
+    {
+      label: '↲',
+      onClick: handleTreeSelect,
+      disabled:
+        panelMode !== 'tree' || !activeZone || activeZone.peripherals.length === 0,
+      ariaLabel: 'Entrer dans la zone sélectionnée'
+    },
+    {
+      label: '⤺',
+      onClick: handleTreeBack,
+      disabled: panelMode !== 'tree' || treeState.peripheralIndex === null,
+      ariaLabel: 'Revenir au niveau zone'
+    }
+  ];
+
+  const getViewButtonClass = (mode: 'summary' | 'tree') =>
+    `ecs-panel__view-button ${panelMode === mode ? 'ecs-panel__view-button--active' : ''}`;
 
   return (
     <section className="ecs-panel">
@@ -351,8 +624,8 @@ const EcsPanel = ({
       </header>
       <div className="ecs-panel__body">
         <div className="ecs-panel__screen">
-          {summaryLines.map((line) => (
-            <div key={line} className="ecs-panel__line">
+          {screenLines.map((line, index) => (
+            <div key={`${line}-${index}`} className="ecs-panel__line">
               {line}
             </div>
           ))}
@@ -368,12 +641,43 @@ const EcsPanel = ({
             </div>
           ))}
         </div>
-        <div className="ecs-panel__keypad">
-          {keypadLayout.map((key) => (
-            <span key={key} className="ecs-panel__key">
-              {key}
-            </span>
-          ))}
+        <div className="ecs-panel__controls">
+          <div className="ecs-panel__view-switch">
+            <button
+              type="button"
+              className={getViewButtonClass('summary')}
+              onClick={() => setPanelMode('summary')}
+            >
+              Synthèse
+            </button>
+            <button
+              type="button"
+              className={getViewButtonClass('tree')}
+              onClick={() => setPanelMode('tree')}
+              disabled={!scenario}
+              title={
+                scenario
+                  ? undefined
+                  : "Lancer un scénario pour afficher l'arbre de détection"
+              }
+            >
+              Arbre de détection
+            </button>
+          </div>
+          <div className="ecs-panel__keypad">
+            {keypadButtons.map((key) => (
+              <button
+                key={key.label}
+                type="button"
+                className="ecs-panel__key"
+                onClick={key.onClick}
+                disabled={key.disabled}
+                aria-label={key.ariaLabel}
+              >
+                {key.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     </section>
@@ -572,22 +876,7 @@ const CmsiFacade = ({
     }
   }, [session?.cmsiPhase, session?.t1, session?.t2, sendCmsi]);
 
-  const zoneNameById = useMemo(() => {
-    const mapping = new Map<string, string>();
-    (scenario?.zd ?? []).forEach((zone) => mapping.set(zone.id, zone.name));
-    return mapping;
-  }, [scenario]);
-
-  const detectionMessages = [
-    ...activeAlarms.dm.map(
-      (zoneId) => `DM ${zoneId.toUpperCase()} - ${zoneNameById.get(zoneId) ?? zoneId.toUpperCase()}`
-    ),
-    ...activeAlarms.dai.map(
-      (zoneId) => `DAI ${zoneId.toUpperCase()} - ${zoneNameById.get(zoneId) ?? zoneId.toUpperCase()}`
-    )
-  ];
-
-  const detectionLines = detectionMessages.length > 0 ? chunk(detectionMessages, 2).map((items) => items.join('  |  ')) : [];
+  const detectionLines = buildDetectionLines(scenario, activeAlarms);
   const connectionLine = `CONNEXION: ${(connectionStatus ?? 'inconnu').toUpperCase()}`;
   const ledLines = [
     scenario ? `SCENARIO: ${scenario.name.toUpperCase()}` : 'SCENARIO: AUCUN',
