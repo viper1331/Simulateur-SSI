@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "types": ["jest", "node"],
+    "resolveJsonModule": true,
+    "baseUrl": "./",
+    "paths": {
+      "@ssi/shared-models": ["../../packages/shared-models/src"],
+      "@ssi/state-machines": ["../../packages/state-machines/src"],
+      "@ssi/ui-kit": ["../../packages/ui-kit/src"]
+    }
+  },
+  "include": ["src"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}

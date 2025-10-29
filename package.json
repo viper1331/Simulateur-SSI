@@ -8,8 +8,8 @@
   ],
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "build": "npm run build -w apps/server && npm run build -w apps/trainee-station && npm run build -w apps/trainer-console",
-    "test": "npm run test -w apps/trainee-station && npm run test -w apps/trainer-console && npm run test -w apps/server",
+    "build": "npm run build -w apps/server && npm run build -w apps/trainee-station && npm run build -w apps/trainer-console && npm run build -w apps/central-panel",
+    "test": "npm run test -w apps/trainee-station && npm run test -w apps/trainer-console && npm run test -w apps/central-panel && npm run test -w apps/server",
     "format": "prettier --write .",
     "prisma:deploy": "npm run prisma:generate -w apps/server && npm run prisma:migrate -w apps/server && npm run prisma:seed -w apps/server"
   },
